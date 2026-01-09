@@ -1,1 +1,2 @@
-
+Please find the previous 3D pathology image files attached.
+The ZIP file contains the 4× downsampled labeled mask and the 4× downsampled skeleton (level 2 relative to the level-0 image).
