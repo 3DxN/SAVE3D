@@ -1,4 +1,4 @@
-# SAVE-3D: Structure-Aware Visualization & Exploration for Dense 3D Tissue Images
+# SAVE-3D: Structure-Aware Visualization & Exploration for 3D Densely Labeled Tissue Images
 
 A tri-view interactive visualization system for exploring dense 3D tissue images. SAVE-3D uses **2D contours/shapes** (instead of points) as the linking unit between 2D and 3D views, enabling structure-based navigation and bidirectional exploration.
 
