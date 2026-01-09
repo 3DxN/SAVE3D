@@ -1,1 +1,134 @@
-
+<mxfile host="app.diagrams.net" agent="Claude" version="26.2.14">
+  <diagram name="SAVE-3D Preprocessing Pipeline" id="SAVE3DPipeline">
+    <mxGraphModel dx="1200" dy="2400" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="850" pageHeight="2600" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        
+        <!-- INPUT DATA -->
+        <mxCell id="input_box" value="&lt;div style=&quot;text-align: left;&quot;&gt;&lt;b&gt;INPUT DATA&lt;/b&gt;&lt;br&gt;• Image @ L0 (original resolution)&lt;br&gt;• Outer/Inner Masks @ L2 (4x downsampled)&lt;br&gt;• Skeleton @ L2&lt;/div&gt;" style="shape=rectangle;whiteSpace=wrap;html=1;rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;align=center;" vertex="1" parent="1">
+          <mxGeometry x="100" y="40" width="400" height="80" as="geometry" />
+        </mxCell>
+        
+        <!-- Step 1 -->
+        <mxCell id="step1" value="&lt;div style=&quot;text-align: left;&quot;&gt;&lt;b&gt;Step 1: Load Image @ L0&lt;/b&gt;&lt;br&gt;Load original image volume&lt;/div&gt;" style="shape=rectangle;whiteSpace=wrap;html=1;rounded=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=center;" vertex="1" parent="1">
+          <mxGeometry x="100" y="160" width="400" height="50" as="geometry" />
+        </mxCell>
+        
+        <!-- Step 2 -->
+        <mxCell id="step2" value="&lt;div style=&quot;text-align: left;&quot;&gt;&lt;b&gt;Step 2: Build Image Pyramid&lt;/b&gt;&lt;br&gt;Multi-resolution pyramid (GPU-accelerated local mean downsampling)&lt;br&gt;L0 → L1 → L2 → L3 (for Napari fast browsing)&lt;/div&gt;" style="shape=rectangle;whiteSpace=wrap;html=1;rounded=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=center;" vertex="1" parent="1">
+          <mxGeometry x="100" y="250" width="400" height="70" as="geometry" />
+        </mxCell>
+        
+        <!-- Step 3 -->
+        <mxCell id="step3" value="&lt;div style=&quot;text-align: left;&quot;&gt;&lt;b&gt;Step 3: Load Masks @ L2&lt;/b&gt;&lt;br&gt;Load outer/inner masks, auto-assign colors&lt;br&gt;Supports two formats:&lt;br&gt;- Format A: One TIFF per label&lt;br&gt;- Format B: Single label volume (auto-scan unique values)&lt;/div&gt;" style="shape=rectangle;whiteSpace=wrap;html=1;rounded=1;fillColor=#e1d5e7;strokeColor=#9673a6;align=center;" vertex="1" parent="1">
+          <mxGeometry x="100" y="360" width="400" height="100" as="geometry" />
+        </mxCell>
+        
+        <!-- Step 3.5 -->
+        <mxCell id="step3_5" value="&lt;div style=&quot;text-align: left;&quot;&gt;&lt;b&gt;Step 3.5: Skeleton Intersection Analysis&lt;/b&gt;&lt;br&gt;Compute skeleton overlap ratio with each label&lt;br&gt;→ Generate skeleton_metadata&lt;/div&gt;" style="shape=rectangle;whiteSpace=wrap;html=1;rounded=1;fillColor=#ffe6cc;strokeColor=#d79b00;align=center;" vertex="1" parent="1">
+          <mxGeometry x="100" y="500" width="400" height="70" as="geometry" />
+        </mxCell>
+        
+        <!-- Step 4 -->
+        <mxCell id="step4" value="&lt;div style=&quot;text-align: left;&quot;&gt;&lt;b&gt;Step 4: Create Combined Labels&lt;/b&gt;&lt;br&gt;Merge all outer masks → single label volume&lt;br&gt;L2 upsample → L0 (nearest neighbor)&lt;br&gt;Build label pyramid&lt;/div&gt;" style="shape=rectangle;whiteSpace=wrap;html=1;rounded=1;fillColor=#f8cecc;strokeColor=#b85450;align=center;" vertex="1" parent="1">
+          <mxGeometry x="100" y="610" width="400" height="80" as="geometry" />
+        </mxCell>
+        
+        <!-- Step 4.1 -->
+        <mxCell id="step4_1" value="&lt;div style=&quot;text-align: left;&quot;&gt;&lt;b&gt;Step 4.1: Extract Skeleton Points for KD-Tree&lt;/b&gt;&lt;br&gt;• Extract all skeleton voxel coordinates&lt;br&gt;• Compute label and L0 CC mapping per point&lt;br&gt;• Build 26-connectivity neighbors&lt;br&gt;• BFS segmentation into per-label instances&lt;br&gt;→ Generate skeleton_points.json&lt;/div&gt;" style="shape=rectangle;whiteSpace=wrap;html=1;rounded=1;fillColor=#fff2cc;strokeColor=#d6b656;align=center;" vertex="1" parent="1">
+          <mxGeometry x="100" y="730" width="400" height="110" as="geometry" />
+        </mxCell>
+        
+        <!-- Step 4.2 -->
+        <mxCell id="step4_2" value="&lt;div style=&quot;text-align: left;&quot;&gt;&lt;b&gt;Step 4.2: Build Skeleton Graph&lt;/b&gt;&lt;br&gt;• Build node/edge graph structure&lt;br&gt;• Compute endpoints and bifurcations&lt;br&gt;• Compute total length (μm)&lt;br&gt;→ Generate skeleton_graph.json&lt;/div&gt;" style="shape=rectangle;whiteSpace=wrap;html=1;rounded=1;fillColor=#fff2cc;strokeColor=#d6b656;align=center;" vertex="1" parent="1">
+          <mxGeometry x="100" y="880" width="400" height="100" as="geometry" />
+        </mxCell>
+        
+        <!-- Step 4.3 -->
+        <mxCell id="step4_3" value="&lt;div style=&quot;text-align: left;&quot;&gt;&lt;b&gt;Step 4.3: Prebuild Morphology Meshes&lt;/b&gt;&lt;br&gt;Build global meshes for Skeleton Host Navigation Mode&lt;br&gt;Outer + inner mesh per label (VTK format)&lt;br&gt;→ morphology_meshes/outer_*.vtk, inner_*.vtk&lt;/div&gt;" style="shape=rectangle;whiteSpace=wrap;html=1;rounded=1;fillColor=#f5f5f5;strokeColor=#666666;align=center;" vertex="1" parent="1">
+          <mxGeometry x="100" y="1020" width="400" height="80" as="geometry" />
+        </mxCell>
+        
+        <!-- Step 4.4 -->
+        <mxCell id="step4_4" value="&lt;div style=&quot;text-align: left;&quot;&gt;&lt;b&gt;Step 4.4: Prebuild Skeleton Instance Meshes&lt;/b&gt;&lt;br&gt;Build per-instance meshes for Skeleton Host Instance Mode&lt;br&gt;Independent structures based on skeleton connectivity&lt;br&gt;→ skeleton_instance_meshes/inst_*.vtk&lt;/div&gt;" style="shape=rectangle;whiteSpace=wrap;html=1;rounded=1;fillColor=#f5f5f5;strokeColor=#666666;align=center;" vertex="1" parent="1">
+          <mxGeometry x="100" y="1140" width="400" height="80" as="geometry" />
+        </mxCell>
+        
+        <!-- Step 4.5 -->
+        <mxCell id="step4_5" value="&lt;div style=&quot;text-align: left;&quot;&gt;&lt;b&gt;Step 4.5: Prebuild Image Host Meshes&lt;/b&gt;&lt;br&gt;Build per-3D-CC meshes for Image Host Mode&lt;br&gt;Build (z, 2D_cc_id) → 3D_cc_id lookup table&lt;br&gt;→ image_host_meshes/*/*.vtk&lt;br&gt;→ image_host_meshes.json&lt;/div&gt;" style="shape=rectangle;whiteSpace=wrap;html=1;rounded=1;fillColor=#f5f5f5;strokeColor=#666666;align=center;" vertex="1" parent="1">
+          <mxGeometry x="100" y="1260" width="400" height="100" as="geometry" />
+        </mxCell>
+        
+        <!-- Step 5 -->
+        <mxCell id="step5" value="&lt;div style=&quot;text-align: left;&quot;&gt;&lt;b&gt;Step 5: Precompute 2D CC and Adjacency&lt;/b&gt;&lt;br&gt;For each z-slice compute:&lt;br&gt;• Bbox, area, centroid per CC&lt;br&gt;• Skeleton marker position&lt;br&gt;• Overlap relationships with z±1 (same label + cross label)&lt;br&gt;→ cc_metadata.json (critical for runtime CC propagation!)&lt;/div&gt;" style="shape=rectangle;whiteSpace=wrap;html=1;rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;align=center;" vertex="1" parent="1">
+          <mxGeometry x="100" y="1400" width="400" height="110" as="geometry" />
+        </mxCell>
+        
+        <!-- Step 6 -->
+        <mxCell id="step6" value="&lt;div style=&quot;text-align: left;&quot;&gt;&lt;b&gt;Step 6: Write Zarr&lt;/b&gt;&lt;br&gt;Output OME-NGFF format Zarr:&lt;br&gt;• Image pyramid @ L0&lt;br&gt;• Label pyramid @ L0&lt;br&gt;• Outer masks @ L2 (Dask lazy loading)&lt;br&gt;• Inner masks @ L2&lt;br&gt;→ output.zarr + metadata.json&lt;/div&gt;" style="shape=rectangle;whiteSpace=wrap;html=1;rounded=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=center;" vertex="1" parent="1">
+          <mxGeometry x="100" y="1550" width="400" height="120" as="geometry" />
+        </mxCell>
+        
+        <!-- OUTPUT FILES -->
+        <mxCell id="output_box" value="&lt;div style=&quot;text-align: left;&quot;&gt;&lt;b&gt;OUTPUT FILES&lt;/b&gt;&lt;br&gt;output.zarr/               - Main data (image + labels + masks)&lt;br&gt;metadata.json              - Resolution, colors, etc.&lt;br&gt;cc_metadata.json           - 2D CC precomputed data (~largest file)&lt;br&gt;skeleton_points.json       - Skeleton points for KD-Tree&lt;br&gt;skeleton_graph.json        - Skeleton graph structure&lt;br&gt;morphology_meshes/         - Navigation mode meshes&lt;br&gt;skeleton_instance_meshes/  - Instance mode meshes&lt;br&gt;image_host_meshes/         - Image host mode meshes&lt;/div&gt;" style="shape=rectangle;whiteSpace=wrap;html=1;rounded=1;fillColor=#b1ddf0;strokeColor=#006EAF;align=center;" vertex="1" parent="1">
+          <mxGeometry x="100" y="1710" width="400" height="160" as="geometry" />
+        </mxCell>
+        
+        <!-- Arrows -->
+        <mxCell id="a1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="input_box" target="step1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        
+        <mxCell id="a2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="step1" target="step2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        
+        <mxCell id="a3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="step2" target="step3">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        
+        <mxCell id="a4" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="step3" target="step3_5">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        
+        <mxCell id="a5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="step3_5" target="step4">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        
+        <mxCell id="a6" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="step4" target="step4_1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        
+        <mxCell id="a7" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="step4_1" target="step4_2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        
+        <mxCell id="a8" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="step4_2" target="step4_3">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        
+        <mxCell id="a9" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="step4_3" target="step4_4">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        
+        <mxCell id="a10" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="step4_4" target="step4_5">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        
+        <mxCell id="a11" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="step4_5" target="step5">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        
+        <mxCell id="a12" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="step5" target="step6">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        
+        <mxCell id="a13" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;" edge="1" parent="1" source="step6" target="output_box">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
