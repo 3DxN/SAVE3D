@@ -26,6 +26,11 @@ import sys
 import os
 from pathlib import Path
 
+# Suppress VTK warning messages (non-fatal OpenGL context warnings on Windows)
+# These "wglMakeCurrent failed" errors don't affect functionality
+import vtk
+vtk.vtkObject.GlobalWarningDisplayOff()
+
 
 def main(zarr_path=None):
     """

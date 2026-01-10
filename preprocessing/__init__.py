@@ -26,7 +26,8 @@ from .transforms import upsample_mask_nearest
 from .skeleton import (
     preprocess_skeleton_intersections,
     build_skeleton_graph,
-    extract_skeleton_points_for_kdtree
+    extract_skeleton_points_for_kdtree,
+    compute_skeleton_labels
 )
 from .cc_analysis import precompute_2d_cc_and_adjacency
 from .mesh_builders import (
@@ -56,6 +57,7 @@ __all__ = [
     'preprocess_skeleton_intersections',
     'build_skeleton_graph',
     'extract_skeleton_points_for_kdtree',
+    'compute_skeleton_labels',
     # CC Analysis
     'precompute_2d_cc_and_adjacency',
     # Mesh Builders

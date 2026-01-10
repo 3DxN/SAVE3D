@@ -28,6 +28,11 @@ Package structure:
 
 """
 
+# Suppress VTK warning messages (non-fatal OpenGL context warnings on Windows)
+# These "wglMakeCurrent failed" errors occur during window operations but don't affect functionality
+import vtk
+vtk.vtkObject.GlobalWarningDisplayOff()
+
 from .app import SAVE3DViewer
 
 __all__ = ['SAVE3DViewer']

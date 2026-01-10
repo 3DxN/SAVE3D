@@ -35,6 +35,16 @@ Color Assignment:
 - Unspecified labels get auto-assigned rainbow colors
 """
 
+# Configure PyVista/VTK for offscreen rendering BEFORE any imports
+# This prevents "wglMakeCurrent failed" OpenGL errors on Windows
+import os
+os.environ['PYVISTA_OFF_SCREEN'] = 'true'
+os.environ['VTK_DEFAULT_RENDER_WINDOW_OFFSCREEN'] = '1'
+
+# Suppress VTK warnings (non-fatal OpenGL context errors)
+import vtk
+vtk.vtkObject.GlobalWarningDisplayOff()
+
 import gc
 import json
 import time
@@ -61,6 +71,7 @@ from preprocessing import (
     write_zarr_pathology,
 )
 from preprocessing.config import cleanup_gpu
+from preprocessing.skeleton import compute_skeleton_labels
 
 
 def main():
@@ -82,12 +93,14 @@ def main():
     DOWNSAMPLE_FACTOR = 2 ** PROCESSING_LEVEL  # = 4
     
     # Input @ Level 0
-    IMAGE_PATH = "IDC-P_8x_111325.tif"
+    # IMAGE_PATH = "IDC-P_8x_111325.tif"
+    IMAGE_PATH = "fc_2x_all_30_to_1200_cropped_092325.tif"
     VOXEL_SIZE_L0 = (0.9667 * 2, 0.9667 * 2, 0.9667 * 2)  # μm
     PYRAMID_LEVELS = 4
     
     # Skeleton @ Level 2
-    SKELETON_L2 = 'output_skeleton_32x_092625.tiff'
+    # SKELETON_L2 = 'output_skeleton_32x_092625.tiff'
+    SKELETON_L2 = 'Crypt_mask_cropped_mask_4x_010926-skeleton.tif'
     
     # Output
     OUT_ZARR = 'prostate_pathology.zarr'
@@ -96,7 +109,7 @@ def main():
     # Choose ONE of the following input formats:
     
     # --- Format A: Separate mask files (Legacy) ---
-    USE_SEPARATE_MASKS = True  # Set to True for Format A, False for Format B
+    USE_SEPARATE_MASKS = False  # Set to True for Format A, False for Format B
     
     if USE_SEPARATE_MASKS:
         # Outer masks @ Level 2 (required)
@@ -126,7 +139,8 @@ def main():
     
     else:
         # --- Format B: Single label volume (New) ---
-        LABEL_OUTER_PATH = '8x_mask-lbl.tif'  # Values: 0=bg, 1, 2, 3, ...
+        # LABEL_OUTER_PATH = '8x_mask-lbl.tif'  # Values: 0=bg, 1, 2, 3, ...
+        LABEL_OUTER_PATH = 'Crypt_mask_cropped_mask_4x_010926-1-lbl.tif'  # Values: 0=bg, 1, 2, 3, ...
         LABEL_INNER_PATH = None  # Optional: set to None if no inner
         
         LABEL_DICT = {}  # {value: name} mapping, empty for auto-naming
@@ -223,10 +237,10 @@ def main():
         print(f"Actual outer mask shape: {first_outer.shape}")
         
         if first_outer.shape != expected_L2_shape:
-            print(f"⚠️ Warning: Mask shape mismatch!")
-            print(f"   Expected: {expected_L2_shape}")
-            print(f"   Got: {first_outer.shape}")
-            print(f"   Will handle size mismatch during upsampling")
+            print(f" Warning: Mask shape mismatch!")
+            print(f" Expected: {expected_L2_shape}")
+            print(f" Got: {first_outer.shape}")
+            print(f" Will handle size mismatch during upsampling")
         
         # Step 3.5: Load skeleton & compute intersections @ L2
         progress.update("Step 3.5/7: Loading skeleton & computing intersections @ L2...")
@@ -235,11 +249,22 @@ def main():
         
         # Verify skeleton size
         if skeleton_L2.shape != first_outer.shape:
-            print(f"⚠️ Warning: Skeleton shape {skeleton_L2.shape} != mask shape {first_outer.shape}")
+            print(f" Warning: Skeleton shape {skeleton_L2.shape} != mask shape {first_outer.shape}")
         
-        # Skeleton intersection (NO mesh generation)
-        skeleton_metadata = preprocess_skeleton_intersections(
-            skeleton_L2, outer_masks_L2, label_names, label_colors
+        # ===         Pre-compute skeleton labels ONCE        ===
+        # This avoids redundant computation in multiple functions
+        progress.update("Pre-computing skeleton labels (shared)...")
+        skeleton_binary = skeleton_L2 > 0
+        skeleton_labels_vol, label_counts = compute_skeleton_labels(
+            skeleton_binary, outer_masks_L2, label_names
+        )
+        # for name, count in label_counts.items():
+        #     print(f"  {name}: {count:,} voxels")
+        
+        # Skeleton intersection (NO mesh generation) - reuses skeleton_labels_vol
+        skeleton_metadata, _ = preprocess_skeleton_intersections(
+            skeleton_L2, outer_masks_L2, label_names, label_colors,
+            skeleton_labels=skeleton_labels_vol
         )
         
         # Step 4: Create combined labels
@@ -275,22 +300,24 @@ def main():
             lab_pyramid.append(lab_down)
             progress.update(f"  Level {level}: {lab_down.shape}")
         
-        # Step 4.1: Extract skeleton points
+        # Step 4.1: Extract skeleton points (reuses skeleton_labels_vol)
         progress.update("Step 4.1/7: Extracting skeleton points for KD-Tree...")
         skeleton_points = extract_skeleton_points_for_kdtree(
             skeleton_L2, outer_masks_L2, label_names, VOXEL_SIZE_L2,
             labels_L0=combined_L0,
             downsample_factor=DOWNSAMPLE_FACTOR,
             processing_level=PROCESSING_LEVEL,
-            target_max_points=50000
+            target_max_points=50000,
+            skeleton_labels=skeleton_labels_vol
         )
         
-        # Step 4.2: Build skeleton graph
+        # Step 4.2: Build skeleton graph (reuses skeleton_labels_vol)
         progress.update("Step 4.2/7: Building skeleton graph...")
         skeleton_graph = build_skeleton_graph(
             skeleton_L2, outer_masks_L2, label_names, VOXEL_SIZE_L2,
             processing_level=PROCESSING_LEVEL,
-            target_max_points=50000
+            target_max_points=50000,
+            skeleton_labels=skeleton_labels_vol
         )
         
         # Save skeleton graph

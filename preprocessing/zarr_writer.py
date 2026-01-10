@@ -2,6 +2,8 @@
 Zarr Output Writer
 
 Write preprocessed data to Zarr format with OME-NGFF metadata.
+- Parallel writing of pyramid levels using ThreadPoolExecutor
+- Chunked writing for large arrays
 """
 
 import json
@@ -9,14 +11,24 @@ import shutil
 from pathlib import Path
 import numpy as np
 from tqdm import tqdm
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+
+def _write_array_to_zarr(z_arr, arr, desc="Writing"):
+    """Write array to zarr dataset with progress"""
+    z_arr[:] = arr
+    return arr.shape
 
 
 def write_zarr_pathology(zarr_path, img_pyramid, lab_pyramid, 
                          outer_masks_L2, inner_masks_L2, skeleton_metadata,
                          voxel_size_L0, label_colors, label_names, legend_labels,
-                         processing_level, downsample_factor, voxel_size_L2):
+                         processing_level, downsample_factor, voxel_size_L2,
+                         max_workers=4):
     """
     Write output Zarr with all data
+    
+    Uses parallel writing for pyramid levels
     
     Parameters:
     -----------
@@ -46,11 +58,14 @@ def write_zarr_pathology(zarr_path, img_pyramid, lab_pyramid,
         Downsample factor (e.g., 4)
     voxel_size_L2 : tuple
         Voxel size @ Level 2
+    max_workers : int
+        Max parallel workers (default 4)
     """
     import zarr
     import numcodecs
     
     print("\n=== Writing Zarr ===")
+    print(f"  Mode: Optimized (parallel writing)")
     zarr_path = Path(zarr_path)
     
     if zarr_path.exists():
@@ -67,8 +82,10 @@ def write_zarr_pathology(zarr_path, img_pyramid, lab_pyramid,
     
     # 1. Write image pyramid @ L0
     print("Writing image pyramid @ L0...")
-    for i in tqdm(range(len(img_pyramid)), desc="Image pyramid", unit="level"):
-        arr = img_pyramid[i]
+    
+    # Create all datasets first
+    img_datasets = []
+    for i, arr in enumerate(img_pyramid):
         if is_rgb:
             chunks = (min(16, arr.shape[0]), min(256, arr.shape[1]), 
                      min(256, arr.shape[2]), arr.shape[3])
@@ -77,18 +94,47 @@ def write_zarr_pathology(zarr_path, img_pyramid, lab_pyramid,
         
         z_arr = store.create_dataset(str(i), shape=arr.shape, dtype=arr.dtype, 
                                     chunks=chunks, compressor=img_compressor)
-        z_arr[:] = arr
+        img_datasets.append((z_arr, arr, i))
+    
+    # Write in parallel
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(_write_array_to_zarr, z_arr, arr, f"Level {i}"): i 
+            for z_arr, arr, i in img_datasets
+        }
+        
+        for future in tqdm(as_completed(futures), total=len(futures), 
+                          desc="Image pyramid", unit="level"):
+            level = futures[future]
+            try:
+                future.result()
+            except Exception as e:
+                print(f"  Level {level} failed: {e}")
     
     # 2. Write combined labels pyramid @ L0
     print("Writing combined labels pyramid @ L0...")
     seg_group = store.create_group("segmentation")
     
-    for i in tqdm(range(len(lab_pyramid)), desc="Labels pyramid", unit="level"):
-        arr = lab_pyramid[i]
+    lab_datasets = []
+    for i, arr in enumerate(lab_pyramid):
         chunks = (min(16, arr.shape[0]), min(256, arr.shape[1]), min(256, arr.shape[2]))
         z_arr = seg_group.create_dataset(str(i), shape=arr.shape, dtype=arr.dtype, 
                                         chunks=chunks, compressor=lab_compressor)
-        z_arr[:] = arr
+        lab_datasets.append((z_arr, arr, i))
+    
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(_write_array_to_zarr, z_arr, arr, f"Level {i}"): i 
+            for z_arr, arr, i in lab_datasets
+        }
+        
+        for future in tqdm(as_completed(futures), total=len(futures), 
+                          desc="Labels pyramid", unit="level"):
+            level = futures[future]
+            try:
+                future.result()
+            except Exception as e:
+                print(f"  Level {level} failed: {e}")
     
     # 3. Write outer masks @ L2
     print("Writing outer masks @ L2...")
