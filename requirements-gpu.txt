@@ -1,0 +1,47 @@
+# SAVE-3D Requirements (GPU Accelerated Version)
+# ===============================================
+#
+# Requires: NVIDIA GPU with CUDA support
+#
+# Install with pip:
+#   pip install -r requirements-gpu.txt
+#
+# Install with uv (recommended, faster):
+#   uv pip install -r requirements-gpu.txt
+#
+# Note: For CUDA 11.x, replace cupy-cuda12x with cupy-cuda11x
+
+# === Include base requirements ===
+-r requirements.txt
+
+# === GPU Acceleration (CuPy) ===
+# CuPy provides GPU-accelerated NumPy-compatible arrays and functions
+# Including: cupyx.scipy.ndimage.label for connected component labeling
+#
+# Works on both Windows and Linux!
+#
+# Choose ONE based on your CUDA version:
+cupy-cuda12x>=12.0.0    # For CUDA 12.x
+# cupy-cuda11x>=11.0.0  # For CUDA 11.x (uncomment if needed)
+
+# === GPU Features Provided by CuPy ===
+# - Array operations (NumPy compatible)
+# - Image downsampling (pyramid building) with pipelined CUDA streams
+# - Connected component labeling (cupyx.scipy.ndimage.label)
+# - Morphological operations
+# - Convolution and filtering
+# - np.unique acceleration for large volumes
+
+# === Optional: Full RAPIDS Suite (Linux only, via conda) ===
+#
+# For additional GPU-accelerated libraries on Linux:
+# - cucim: GPU image processing (scikit-image compatible)
+# - cuml: GPU machine learning (scikit-learn compatible)
+# - cugraph: GPU graph processing
+#
+# RAPIDS is NOT available on Windows and must be installed via conda:
+#
+#   conda install -c rapidsai -c conda-forge -c nvidia \
+#       cucim cuml cugraph python=3.10 cuda-version=12.0
+#
+# Note: RAPIDS requires Python 3.10 or 3.11

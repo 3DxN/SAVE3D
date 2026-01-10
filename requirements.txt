@@ -1,0 +1,35 @@
+# SAVE-3D Requirements (CPU Version)
+# ===================================
+# 
+# Install with pip:
+#   pip install -r requirements.txt
+#
+# Install with uv (recommended, faster):
+#   uv pip install -r requirements.txt
+
+# === Core Scientific Computing ===
+numpy>=1.24.0
+scipy>=1.10.0
+
+# === Image Processing ===
+scikit-image>=0.21.0
+tifffile>=2023.7.0
+
+# === 2D Visualization (Napari) ===
+napari[all]>=0.4.18
+
+# === 3D Visualization (PyVista) ===
+pyvista>=0.42.0
+pyvistaqt>=0.11.0
+
+# === Data Storage ===
+zarr>=2.16.0
+numcodecs>=0.12.0
+dask[array]>=2023.9.0
+
+# === Qt Backend ===
+qtpy>=2.4.0
+pyqt5>=5.15.0
+
+# === Utilities ===
+tqdm>=4.66.0

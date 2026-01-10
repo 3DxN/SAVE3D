@@ -1,0 +1,106 @@
+[project]
+name = "save3d"
+version = "0.1.0"
+description = "SAVE-3D: Structure-Aware Visualization & Exploration for 3D Densely Labeled Tissue Images"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "Huai-Ching Hsieh" },
+    { name = "Yang-Hsien Lin" }
+]
+keywords = ["3d-visualization", "pathology", "napari", "pyvista", "medical-imaging"]
+
+dependencies = [
+    # === Core Scientific Computing ===
+    "numpy>=1.24.0",
+    "scipy>=1.10.0",
+    
+    # === Image Processing ===
+    "scikit-image>=0.21.0",
+    "tifffile>=2023.7.0",
+    
+    # === 2D Visualization (Napari) ===
+    "napari[all]>=0.4.18",
+    
+    # === 3D Visualization (PyVista) ===
+    "pyvista>=0.42.0",
+    "pyvistaqt>=0.11.0",
+    
+    # === Data Storage ===
+    "zarr>=2.16.0",
+    "numcodecs>=0.12.0",
+    "dask[array]>=2023.9.0",
+    
+    # === Qt Backend ===
+    "qtpy>=2.4.0",
+    "pyqt5>=5.15.0",
+    
+    # === Utilities ===
+    "tqdm>=4.66.0",
+]
+
+[project.optional-dependencies]
+# GPU acceleration with CuPy (NVIDIA CUDA)
+gpu = [
+    "cupy-cuda12x>=12.0.0",  # For CUDA 12.x, use cupy-cuda11x for CUDA 11.x
+]
+
+# Full GPU acceleration with RAPIDS (requires conda)
+# Note: RAPIDS packages are best installed via conda, not pip
+rapids = [
+    "cupy-cuda12x>=12.0.0",
+    # cucim, cuml, cugraph should be installed via conda
+]
+
+# Development dependencies
+dev = [
+    "pytest>=7.4.0",
+    "pytest-cov>=4.1.0",
+    "black>=23.9.0",
+    "ruff>=0.0.290",
+    "mypy>=1.5.0",
+]
+
+[project.scripts]
+save3d-preprocess = "main_preprocessing:main"
+save3d-app = "main_app:main"
+
+[project.urls]
+Homepage = "https://github.com/your-org/save3d"
+Documentation = "https://github.com/your-org/save3d#readme"
+Repository = "https://github.com/your-org/save3d"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["preprocessing", "save3d_app"]
+
+# === UV Configuration ===
+[tool.uv]
+# Use system Python if available
+python-preference = "system"
+
+# === Ruff (Linter) Configuration ===
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP"]
+ignore = ["E501"]  # Line too long (handled by formatter)
+
+# === Black (Formatter) Configuration ===
+[tool.black]
+line-length = 100
+target-version = ["py310"]
+
+# === MyPy Configuration ===
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
+

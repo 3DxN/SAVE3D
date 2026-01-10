@@ -122,18 +122,146 @@ python main_app.py output.zarr
 
 ## Environment Setup
 
-*(To be added)*
+### Python Version Requirement
+
+> ⚠️ **Important: Use Python 3.10 or 3.11**
+>
+> This ensures compatibility with GPU acceleration packages (RAPIDS: cucim, cuml, cugraph).
+> - Python 3.9 and below: Newer versions of napari are not supported
+> - Python 3.12+: RAPIDS is not fully supported yet
+
+### One-Click Setup (Recommended)
+
+```bash
+# Windows (PowerShell)
+.\setup_env.ps1          # CPU version
+.\setup_env.ps1 -GPU     # GPU version
+
+# macOS/Linux
+chmod +x setup_env.sh
+./setup_env.sh           # CPU version
+./setup_env.sh --gpu     # GPU version
+```
+
+### Manual Setup with uv
+
+[uv](https://github.com/astral-sh/uv) is an extremely fast Python package manager, recommended for use.
+
+```bash
+# 1. Install uv (if not already installed)
+# Windows (PowerShell)
+powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+
+# macOS/Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# 2. Install Python 3.10 (uv will download automatically)
+uv python install 3.10
+
+# 3. Create virtual environment and install dependencies (CPU version)
+uv venv .venv --python 3.10
+.venv\Scripts\activate  # Windows
+# source .venv/bin/activate  # macOS/Linux
+
+uv pip install -r requirements.txt
+
+# 4. (Optional) GPU accelerated version - requires NVIDIA GPU + CUDA
+uv pip install -r requirements-gpu.txt
+```
+
+### Alternative: pip + venv
+
+```bash
+# Create virtual environment
+python -m venv .venv
+.venv\Scripts\activate  # Windows
+# source .venv/bin/activate  # macOS/Linux
+
+# Install dependencies
+pip install -r requirements.txt
+
+# (Optional) GPU acceleration
+pip install -r requirements-gpu.txt
+```
+
+### Alternative: conda (for RAPIDS GPU acceleration)
+
+If you need full RAPIDS GPU acceleration (including cuCIM, cuML, cuGraph), use conda:
+
+```bash
+# Create conda environment (must use Python 3.10 or 3.11)
+conda create -n save3d python=3.10
+conda activate save3d
+
+# Install base dependencies
+pip install -r requirements.txt
+
+# Install RAPIDS (requires NVIDIA GPU + CUDA 12.x)
+conda install -c rapidsai -c conda-forge -c nvidia \
+    cupy cucim cuml cugraph cuda-version=12.0
+```
+
+### Python Version Compatibility Matrix
+
+| Python | napari | pyvista | CuPy | RAPIDS | Recommendation |
+|--------|--------|---------|------|--------|----------------|
+| 3.9 | ✅ | ✅ | ✅ | ⚠️ Limited | ❌ Not recommended |
+| **3.10** | ✅ | ✅ | ✅ | ✅ | ✅ **Recommended** |
+| **3.11** | ✅ | ✅ | ✅ | ✅ | ✅ Supported |
+| 3.12 | ✅ | ✅ | ✅ | ❌ Not supported | ❌ Not recommended |
+
+### Verify Installation
+
+```bash
+# Check if installation was successful
+python -c "import napari; import pyvista; import zarr; print('✓ All packages installed')"
+
+# Check GPU support (optional)
+python -c "import cupy; print(f'✓ CuPy GPU: {cupy.cuda.runtime.getDeviceCount()} devices')"
+```
 
 ## Dependencies
 
-- Python 3.10+
-- napari
-- pyvista / pyvistaqt
-- zarr / dask
-- scikit-image
-- scipy
-- CuPy (optional, for GPU acceleration)
+### Core Dependencies
+
+| Package | Version | Purpose |
+|---------|---------|---------|
+| numpy | ≥1.24.0 | Numerical computing |
+| scipy | ≥1.10.0 | Scientific computing |
+| scikit-image | ≥0.21.0 | Image processing |
+| tifffile | ≥2023.7.0 | TIFF I/O |
+| napari | ≥0.4.18 | 2D visualization |
+| pyvista | ≥0.42.0 | 3D visualization |
+| pyvistaqt | ≥0.11.0 | PyVista Qt integration |
+| zarr | ≥2.16.0 | Chunked array storage |
+| dask | ≥2023.9.0 | Parallel computing |
+| qtpy | ≥2.4.0 | Qt abstraction |
+| pyqt5 | ≥5.15.0 | Qt backend |
+| tqdm | ≥4.66.0 | Progress bars |
+
+### Optional GPU Dependencies
+
+| Package | Purpose |
+|---------|---------|
+| cupy-cuda12x | GPU-accelerated NumPy (CUDA 12.x) |
+| cucim | GPU image processing (via conda, Linux only) |
+| cuml | GPU machine learning (via conda, Linux only) |
+| cugraph | GPU graph processing (via conda, Linux only) |
+
+## GPU Acceleration Features
+
+SAVE-3D preprocessing supports GPU acceleration via CuPy for significant speedups:
+
+| Feature | GPU Acceleration | Speedup |
+|---------|------------------|---------|
+| Image pyramid building | ✅ Pipelined CUDA streams | 5-10x |
+| Mask upsampling | ✅ Chunked GPU processing | 3-5x |
+| Connected component labeling | ✅ cupyx.scipy.ndimage.label | 2-5x |
+| Skeleton point mapping | ✅ Batch L0 CC pre-computation | 10-20x |
+| np.unique on large volumes | ✅ CuPy unique | 2-5x |
+
+> **Note:** GPU acceleration works on both Windows and Linux. CuPy provides cross-platform support, while RAPIDS (cucim, cuml, cugraph) is Linux-only.
 
 ## Author
 
-Developed by **Huai-Ching Hsieh** and **Yang-Hsien Lin**, 2025–2026.  
+Developed by **Huai-Ching Hsieh** and **Yang-Hsien Lin**, 2025–2026.
