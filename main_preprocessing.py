@@ -52,6 +52,18 @@ from pathlib import Path
 import numpy as np
 from tqdm import tqdm
 
+
+class NumpyEncoder(json.JSONEncoder):
+    """Custom JSON encoder for numpy types"""
+    def default(self, obj):
+        if isinstance(obj, np.integer):
+            return int(obj)
+        if isinstance(obj, np.floating):
+            return float(obj)
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return super().default(obj)
+
 # Import preprocessing modules
 from preprocessing import (
     GPU_AVAILABLE,
@@ -68,6 +80,7 @@ from preprocessing import (
     prebuild_morphology_meshes,
     prebuild_instance_meshes,
     prebuild_image_host_meshes,
+    prebuild_skeleton_meshes,
     write_zarr_pathology,
 )
 from preprocessing.config import cleanup_gpu
@@ -323,11 +336,26 @@ def main():
         # Save skeleton graph
         skeleton_graph_path = Path(OUT_ZARR).parent / "skeleton_graph.json"
         with open(skeleton_graph_path, 'w') as f:
-            json.dump(skeleton_graph, f)
+            json.dump(skeleton_graph, f, cls=NumpyEncoder)
         progress.update(f"✓ Skeleton graph saved to {skeleton_graph_path}")
         
-        # Step 4.3: Prebuild morphology meshes
-        progress.update("Step 4.3/7: Prebuilding morphology meshes...")
+        # Save skeleton points
+        skeleton_points_path = Path(OUT_ZARR).parent / "skeleton_points.json"
+        with open(skeleton_points_path, 'w') as f:
+            json.dump(skeleton_points, f, cls=NumpyEncoder)
+        progress.update(f"✓ Skeleton points saved to {skeleton_points_path}")
+        
+        # Step 4.3: Prebuild skeleton meshes
+        progress.update("Step 4.3/7: Prebuilding skeleton meshes...")
+        skeleton_mesh_info = prebuild_skeleton_meshes(
+            skeleton_L2, outer_masks_L2, label_names, label_colors,
+            VOXEL_SIZE_L2, Path(OUT_ZARR).parent,
+            processing_level=PROCESSING_LEVEL
+        )
+        progress.update(f"✓ Skeleton meshes: {len(skeleton_mesh_info['meshes'])} files")
+        
+        # Step 4.3b: Prebuild morphology meshes
+        progress.update("Step 4.3b/7: Prebuilding morphology meshes...")
         morph_mesh_info = prebuild_morphology_meshes(
             outer_masks_L2, inner_masks_L2, label_names, label_colors,
             VOXEL_SIZE_L2, Path(OUT_ZARR).parent,
@@ -349,13 +377,7 @@ def main():
         )
         progress.update(f"✓ Skeleton instance meshes complete")
         
-        # Save skeleton points
-        skeleton_points_path = Path(OUT_ZARR).parent / "skeleton_points.json"
-        with open(skeleton_points_path, 'w') as f:
-            json.dump(skeleton_points, f)
-        progress.update(f"✓ Skeleton points saved to {skeleton_points_path}")
-        
-        # Step 4.5: Prebuild image host meshes
+        # Step 4.5: Prebuild image host meshes (parallel processing)
         progress.update("Step 4.5/7: Prebuilding image host meshes...")
         image_host_mesh_info = prebuild_image_host_meshes(
             outer_masks_L2,
@@ -365,19 +387,15 @@ def main():
             Path(OUT_ZARR).parent,
             processing_level=PROCESSING_LEVEL
         )
-        
-        # Add has_inner_mask to mesh info
         image_host_mesh_info['has_inner_mask'] = has_inner_mask
         
-        # Save image host mesh info
         image_host_mesh_path = Path(OUT_ZARR).parent / "image_host_meshes.json"
         with open(image_host_mesh_path, 'w') as f:
-            json.dump(image_host_mesh_info, f, indent=2)
-        progress.update(f"✓ Image host meshes saved to {image_host_mesh_path}")
+            json.dump(image_host_mesh_info, f, indent=2, cls=NumpyEncoder)
+        progress.update(f"✓ Image host meshes saved")
         
-        # Step 5: 2D CC precomputation
+        # Step 5: Precompute 2D CC and adjacency (parallel processing)
         progress.update("Step 5/7: Precomputing 2D CC and adjacency @ L2...")
-        
         cc_metadata = precompute_2d_cc_and_adjacency(
             outer_masks_L2, inner_masks_L2, skeleton_L2, label_names, 
             VOXEL_SIZE_L2, label_colors,
@@ -385,11 +403,9 @@ def main():
             downsample_factor=DOWNSAMPLE_FACTOR
         )
         
-        # Save CC metadata
         cc_metadata_path = Path(OUT_ZARR).parent / "cc_metadata.json"
-        progress.update(f"Saving CC metadata to {cc_metadata_path}...")
         with open(cc_metadata_path, 'w') as f:
-            json.dump(cc_metadata, f, indent=2)
+            json.dump(cc_metadata, f, indent=2, cls=NumpyEncoder)
         progress.update("✓ CC metadata saved")
         
         # Step 6: Write Zarr

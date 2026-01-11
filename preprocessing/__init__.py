@@ -33,7 +33,8 @@ from .cc_analysis import precompute_2d_cc_and_adjacency
 from .mesh_builders import (
     prebuild_morphology_meshes,
     prebuild_instance_meshes,
-    prebuild_image_host_meshes
+    prebuild_image_host_meshes,
+    prebuild_skeleton_meshes
 )
 from .zarr_writer import write_zarr_pathology
 from .utils import SimpleProgress
@@ -64,6 +65,7 @@ __all__ = [
     'prebuild_morphology_meshes',
     'prebuild_instance_meshes',
     'prebuild_image_host_meshes',
+    'prebuild_skeleton_meshes',
     # Zarr
     'write_zarr_pathology',
     # Utils

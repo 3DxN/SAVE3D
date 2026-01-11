@@ -7,6 +7,12 @@ Morph Modes:
     0: Instance - show single instance prebuilt mesh
     1: Label - show entire label prebuilt mesh  
     2: Z Navigation - minimal updates on z scroll
+
+OPTIMIZATIONS:
+    - LRU cache for 2D CC labeling (avoids re-computing on scroll)
+    - LRU cache for slice data (avoids re-reading from Zarr)
+    - GPU-accelerated CC labeling when available
+    - Aggressive throttling during rapid scrolling
 """
 
 import time
@@ -16,9 +22,139 @@ from scipy.ndimage import zoom
 from skimage import measure
 from qtpy import QtCore, QtWidgets
 import pyvista as pv
+from functools import lru_cache
 
 from ..controls import _center_on_component, _zoom_to_path_bbox, _clear_morphology_actors
 from ..utils import _hex_to_rgb
+
+# GPU-accelerated CC labeling (optional)
+_GPU_CC_AVAILABLE = False
+_cupy_label = None
+
+try:
+    import cupy as cp
+    from cupyx.scipy.ndimage import label as cupy_label
+    _cupy_label = cupy_label
+    _GPU_CC_AVAILABLE = True
+except ImportError:
+    pass
+
+
+# Debug mode - set to False for production to reduce print overhead
+_DEBUG_SLICE_UPDATE = False
+
+
+class _SliceDataCache:
+    """LRU cache for slice data to avoid repeated Zarr reads"""
+    
+    def __init__(self, maxsize=16):
+        self.maxsize = maxsize
+        self.cache = {}  # {(data_type, label_name, z): array}
+        self.access_order = []
+    
+    def get_outer_slice(self, outer_mask, label_name, z):
+        """Get cached outer mask slice or read from Zarr"""
+        key = ('outer', label_name, z)
+        
+        if key in self.cache:
+            self.access_order.remove(key)
+            self.access_order.append(key)
+            return self.cache[key]
+        
+        # Read from Zarr
+        data = outer_mask[z].compute()
+        
+        # Cache
+        self.cache[key] = data
+        self.access_order.append(key)
+        
+        # Evict if over capacity
+        while len(self.cache) > self.maxsize:
+            oldest = self.access_order.pop(0)
+            del self.cache[oldest]
+        
+        return data
+    
+    def get_label_slice(self, lab_full, z):
+        """Get cached label slice or read from Zarr"""
+        key = ('label', 'full', z)
+        
+        if key in self.cache:
+            self.access_order.remove(key)
+            self.access_order.append(key)
+            return self.cache[key]
+        
+        # Read from Zarr
+        data = lab_full[z].compute()
+        
+        # Cache
+        self.cache[key] = data
+        self.access_order.append(key)
+        
+        # Evict if over capacity
+        while len(self.cache) > self.maxsize:
+            oldest = self.access_order.pop(0)
+            del self.cache[oldest]
+        
+        return data
+    
+    def clear(self):
+        """Clear cache"""
+        self.cache.clear()
+        self.access_order.clear()
+
+
+class _CCLabelCache:
+    """LRU-style cache for 2D CC labeling results"""
+    
+    def __init__(self, maxsize=32):
+        self.maxsize = maxsize
+        self.cache = {}  # {(label_id, z): (labeled, num_features)}
+        self.access_order = []  # Most recently accessed keys
+    
+    def get(self, label_id, z, mask):
+        """Get cached result or compute and cache"""
+        key = (label_id, z)
+        
+        if key in self.cache:
+            # Move to end (most recently used)
+            self.access_order.remove(key)
+            self.access_order.append(key)
+            return self.cache[key]
+        
+        # Compute
+        if _GPU_CC_AVAILABLE:
+            try:
+                mask_gpu = cp.asarray(mask)
+                labeled_gpu, num_features = _cupy_label(mask_gpu)
+                labeled = cp.asnumpy(labeled_gpu)
+                del mask_gpu, labeled_gpu
+                result = (labeled, int(num_features))
+            except Exception:
+                result = ndimage.label(mask)
+        else:
+            result = ndimage.label(mask)
+        
+        # Cache
+        self.cache[key] = result
+        self.access_order.append(key)
+        
+        # Evict if over capacity
+        while len(self.cache) > self.maxsize:
+            oldest = self.access_order.pop(0)
+            del self.cache[oldest]
+        
+        return result
+    
+    def clear(self):
+        """Clear cache"""
+        self.cache.clear()
+        self.access_order.clear()
+
+
+# Global cache instances
+_cc_label_cache = _CCLabelCache(maxsize=64)
+_slice_data_cache = _SliceDataCache(maxsize=32)
 
 
 class ImageHost:
@@ -221,7 +357,7 @@ class ImageHost:
         QtCore.QTimer.singleShot(50, self._force_refresh_boundary)
             
     def _on_slice_changed(self, event=None):
-        """Handle slice change with adaptive throttling"""
+        """Handle slice change with aggressive throttling for smooth scrolling"""
         app = self.app
 
         # Skip if in Skeleton Host mode
@@ -255,16 +391,22 @@ class ImageHost:
                 f"No CC tracked"
             )
         
-        # Adaptive throttling
+        # OPTIMIZED: More aggressive throttling for smoother scrolling
         current_time = time.time()
         time_since_last = (current_time - app._last_slice_time) * 1000
         
-        if time_since_last < 100:
+        # Detect rapid scrolling (< 50ms between events)
+        if time_since_last < 50:
+            app._slice_change_count += 2  # Increase faster during rapid scroll
+            # During rapid scroll, use longer delay to batch updates
+            app._adaptive_delay = min(200, 100 + app._slice_change_count * 10)
+        elif time_since_last < 100:
             app._slice_change_count += 1
             app._adaptive_delay = min(150, 50 + app._slice_change_count * 5)
         else:
-            app._slice_change_count = max(0, app._slice_change_count - 2)
-            app._adaptive_delay = max(25, 50 - app._slice_change_count * 2)
+            # Slow scrolling - reset counter and use shorter delay
+            app._slice_change_count = max(0, app._slice_change_count - 3)
+            app._adaptive_delay = max(16, 30 - app._slice_change_count * 2)  # 16ms = ~60fps
         
         app._last_slice_time = current_time
         self._pending_slice = current_slice
@@ -318,12 +460,14 @@ class ImageHost:
         
         # Different L2 layer - use path_3d
         if app.state.cc_path_3d is None:
-            print(f"[TRACK] No path_3d available")
+            if _DEBUG_SLICE_UPDATE:
+                print(f"[TRACK] No path_3d available")
             return
         
         if z_L2 not in app.state.cc_path_3d:
             # Out of path
-            print(f"[TRACK] z={z_L2} not in path")
+            if _DEBUG_SLICE_UPDATE:
+                print(f"[TRACK] z={z_L2} not in path")
             app.napari_view.boundary_layer.data = []
             app.state.tracked_state['z_L2'] = z_L2
 
@@ -359,7 +503,8 @@ class ImageHost:
                 old_z_L2, z_L2, new_label_id, app.state.cc_path_3d
             )
         
-        print(f"[TRACK] z={z_L2}: {new_label_name} CC#{new_cc_id}")
+        if _DEBUG_SLICE_UPDATE:
+            print(f"[TRACK] z={z_L2}: {new_label_name} CC#{new_cc_id}")
         
         if label_changed:
             print(f"[TRACK] ⚠️  LABEL CHANGED: {app.data.label_names[old_label_id-1]} → {new_label_name}")
@@ -384,7 +529,8 @@ class ImageHost:
         # Rebuild based on mode
         if self.morph_mode == 0:  # Instance mode
             if needs_rebuild:
-                print(f"[TRACK] Rebuilding morphology for new instance")
+                if _DEBUG_SLICE_UPDATE:
+                    print(f"[TRACK] Rebuilding morphology for new instance")
                 self._update_2d_view()
                 self._update_morphology_view()
                 self._update_skeleton_marker()
@@ -395,7 +541,8 @@ class ImageHost:
         elif self.morph_mode == 1:  # Label mode
             if label_changed:
                 # Only rebuild when label changes
-                print(f"[TRACK] Rebuilding morphology for new label")
+                if _DEBUG_SLICE_UPDATE:
+                    print(f"[TRACK] Rebuilding morphology for new label")
                 self._update_2d_view()
                 self._update_morphology_view()
                 self._update_skeleton_marker()
@@ -450,7 +597,8 @@ class ImageHost:
         if app.state.tracked_state['label_id'] is None:
             return
         
-        print(f"\n[Z SCROLL] Light update @ z={app.state.tracked_state['z_L2']}")
+        if _DEBUG_SLICE_UPDATE:
+            print(f"\n[Z SCROLL] Light update @ z={app.state.tracked_state['z_L2']}")
         
         self._update_2d_view()                  # Update napari boundary
         self._update_skeleton_marker()          # Move black marker
@@ -461,7 +609,7 @@ class ImageHost:
     # =========================================================================
     
     def _update_2d_view(self):
-        """Update 2D boundary - different strategy based on host mode"""
+        """Update 2D boundary - OPTIMIZED with caching for smooth scrolling"""
         app = self.app
         
         label_name = app.state.tracked_state['label_name']
@@ -470,8 +618,9 @@ class ImageHost:
         cc_id = app.state.tracked_state['cc_id']
         label_id = app.state.tracked_state['label_id']
         
-        print(f"\n[2D] Updating @ z_L0={z_L0}, z_L2={z_L2}")
-        print(f"[2D] Tracking: {label_name} CC#{cc_id}")
+        if _DEBUG_SLICE_UPDATE:
+            print(f"\n[2D] Updating @ z_L0={z_L0}, z_L2={z_L2}")
+            print(f"[2D] Tracking: {label_name} CC#{cc_id}")
         
         if label_name not in app.data.outer_masks_L2:
             app.napari_view.boundary_layer.data = []
@@ -483,14 +632,16 @@ class ImageHost:
             app.napari_view.boundary_layer.data = []
             return
         
-        # === Common: Find CC centroid from L2 ===
-        slice_L2 = outer_mask[z_L2].compute()
+        # === OPTIMIZED: Use slice cache to avoid repeated Zarr reads ===
+        slice_L2 = _slice_data_cache.get_outer_slice(outer_mask, label_name, z_L2)
         
-        labeled_L2, _ = ndimage.label(slice_L2 > 0)
+        # Use cached CC labeling for faster scroll
+        labeled_L2, _ = _cc_label_cache.get(label_id, z_L2, slice_L2 > 0)
         cc_mask_L2 = (labeled_L2 == (cc_id + 1))
         
         if not cc_mask_L2.any():
-            print(f"[2D] CC#{cc_id} not found at z_L2={z_L2}")
+            if _DEBUG_SLICE_UPDATE:
+                print(f"[2D] CC#{cc_id} not found at z_L2={z_L2}")
             app.napari_view.boundary_layer.data = []
             return
         
@@ -503,19 +654,21 @@ class ImageHost:
         centroid_y_L0 = centroid_y_L2 * 4
         centroid_x_L0 = centroid_x_L2 * 4
         
-        # === Extract contour from L0 labels (avoid upsampling error) ===
-        labels_slice_L0 = app.data.lab_full[z_L0].compute()
+        # === OPTIMIZED: Use slice cache for L0 labels ===
+        labels_slice_L0 = _slice_data_cache.get_label_slice(app.data.lab_full, z_L0)
         
         # Create binary mask for label_id
         label_mask_L0 = (labels_slice_L0 == label_id)
         
         if not label_mask_L0.any():
-            print(f"[2D] Label {label_id} not found at z_L0={z_L0}")
+            if _DEBUG_SLICE_UPDATE:
+                print(f"[2D] Label {label_id} not found at z_L0={z_L0}")
             app.napari_view.boundary_layer.data = []
             return
         
-        # Label CCs in L0 mask
-        labeled_L0, num_cc_L0 = ndimage.label(label_mask_L0)
+        # Label CCs in L0 mask (with caching)
+        # Use z_L0 * 1000 + label_id as unique key to avoid collision with L2 cache
+        labeled_L0, num_cc_L0 = _cc_label_cache.get(label_id + 1000, z_L0, label_mask_L0)
         
         # Find CC containing centroid
         centroid_y_int = int(round(centroid_y_L0))
@@ -528,33 +681,30 @@ class ImageHost:
         target_cc_label = labeled_L0[centroid_y_int, centroid_x_int]
         
         if target_cc_label == 0:
-            # Centroid not exactly on CC, search nearby
-            print(f"[2D] Centroid ({centroid_y_int}, {centroid_x_int}) not on CC, searching nearby...")
+            # Centroid not exactly on CC, search nearby (OPTIMIZED: vectorized search)
             search_radius = 20  # pixels @ L0
-            found = False
             
-            for r in range(1, search_radius + 1):
-                for dy in range(-r, r + 1):
-                    for dx in range(-r, r + 1):
-                        if abs(dy) != r and abs(dx) != r:
-                            continue  # Only check edges for speed
-                        
-                        ny = centroid_y_int + dy
-                        nx = centroid_x_int + dx
-                        
-                        if 0 <= ny < labeled_L0.shape[0] and 0 <= nx < labeled_L0.shape[1]:
-                            if labeled_L0[ny, nx] > 0:
-                                target_cc_label = labeled_L0[ny, nx]
-                                found = True
-                                print(f"[2D] Found CC at offset ({dy}, {dx})")
-                                break
-                    if found:
-                        break
-                if found:
-                    break
+            # Use a small bounding box search instead of loop
+            y_min = max(0, centroid_y_int - search_radius)
+            y_max = min(labeled_L0.shape[0], centroid_y_int + search_radius + 1)
+            x_min = max(0, centroid_x_int - search_radius)
+            x_max = min(labeled_L0.shape[1], centroid_x_int + search_radius + 1)
             
-            if not found:
-                print(f"[2D] No CC found near centroid, falling back to L2")
+            local_labeled = labeled_L0[y_min:y_max, x_min:x_max]
+            local_nonzero = np.argwhere(local_labeled > 0)
+            
+            if len(local_nonzero) > 0:
+                # Find closest non-zero point
+                local_center = np.array([centroid_y_int - y_min, centroid_x_int - x_min])
+                distances = np.sum((local_nonzero - local_center) ** 2, axis=1)
+                closest_idx = np.argmin(distances)
+                closest_local = local_nonzero[closest_idx]
+                target_cc_label = local_labeled[closest_local[0], closest_local[1]]
+                if _DEBUG_SLICE_UPDATE:
+                    print(f"[2D] Found CC via vectorized search")
+            else:
+                if _DEBUG_SLICE_UPDATE:
+                    print(f"[2D] No CC found near centroid, falling back to L2")
                 # Fallback: use L2 upsampled (has error but at least shows something)
                 cc_mask_L0 = zoom(cc_mask_L2, 4, order=0)
                 target_cc_label = -1  # Mark as fallback
@@ -562,10 +712,12 @@ class ImageHost:
         if target_cc_label > 0:
             # Extract from L0 labels
             cc_mask_L0 = (labeled_L0 == target_cc_label)
-            print(f"[2D] Using L0 labels CC (label={target_cc_label}, area={np.sum(cc_mask_L0)})")
+            if _DEBUG_SLICE_UPDATE:
+                print(f"[2D] Using L0 labels CC (label={target_cc_label}, area={np.sum(cc_mask_L0)})")
         elif target_cc_label == -1:
             # Fallback already set
-            print(f"[2D] Using L2 upsampled (fallback)")
+            if _DEBUG_SLICE_UPDATE:
+                print(f"[2D] Using L2 upsampled (fallback)")
 
         # Store for guide plane contour use
         app.state._current_cc_mask_L0 = cc_mask_L0
@@ -585,12 +737,15 @@ class ImageHost:
                     contour[:, 1]
                 ])
                 app.napari_view.boundary_layer.add_polygons(polygon)
-            print(f"[2D] ✓ Boundary updated ({len(contours)} contours)")
+            if _DEBUG_SLICE_UPDATE:
+                print(f"[2D] ✓ Boundary updated ({len(contours)} contours)")
         else:
-            print(f"[2D] No contours found")
+            if _DEBUG_SLICE_UPDATE:
+                print(f"[2D] No contours found")
         
         app.napari_view.boundary_layer.refresh()
-        QtWidgets.QApplication.processEvents()
+        # OPTIMIZED: Remove processEvents during scroll - let Qt batch updates
+        # QtWidgets.QApplication.processEvents()
 
         if app.state.auto_center_enabled:
             QtCore.QTimer.singleShot(50, lambda: _center_on_component(app, from_button=False))
@@ -603,9 +758,11 @@ class ImageHost:
             app.napari_view.boundary_layer.refresh()
             app.napari_view.viewer.dims.events.current_step()  # Trigger redraw
             QtWidgets.QApplication.processEvents()
-            print("[2D] ✓ Forced boundary refresh")
+            if _DEBUG_SLICE_UPDATE:
+                print("[2D] ✓ Forced boundary refresh")
         except Exception as e:
-            print(f"[2D] Refresh error: {e}")
+            if _DEBUG_SLICE_UPDATE:
+                print(f"[2D] Refresh error: {e}")
 
     # =========================================================================
     # SKELETON OPS - Marker position updates
@@ -771,9 +928,11 @@ class ImageHost:
                         
                         if app.state.host_mode == 'image':
                             app.state.sphere_position = np.array(marker_pos)
-                        print(f"  ✓ Marker moved to z={z_L2}")
+                        if _DEBUG_SLICE_UPDATE:
+                            print(f"  ✓ Marker moved to z={z_L2}")
                     except Exception as e:
-                        print(f"  ✗ Marker update failed: {e}")
+                        if _DEBUG_SLICE_UPDATE:
+                            print(f"  ✗ Marker update failed: {e}")
                         # Fallback to full rebuild
                         self._update_skeleton_view()
 
@@ -1124,14 +1283,17 @@ class ImageHost:
 
             # Update contour if checkbox is checked
             if app.show_plane_contour_chk.isChecked():
-                print(f"  [PLANE] Updating contour @ z={z_L2}")
+                if _DEBUG_SLICE_UPDATE:
+                    print(f"  [PLANE] Updating contour @ z={z_L2}")
                 self._update_plane_contour()
 
             app.morphology_view.plotter.render()
-            print(f"  ✓ Plane moved to z={z_L2}")
+            if _DEBUG_SLICE_UPDATE:
+                print(f"  ✓ Plane moved to z={z_L2}")
             
         except Exception as e:
-            print(f"  ✗ Plane update failed: {e}")
+            if _DEBUG_SLICE_UPDATE:
+                print(f"  ✗ Plane update failed: {e}")
 
     def _update_image_host_guide_plane(self):
         """Image Host: Update guide plane using CC bbox"""
@@ -1153,10 +1315,11 @@ class ImageHost:
                 app.morphology_view.plotter.render()
             return
         
-        # Debug output
-        print(f"  [DEBUG] _current_cc_mask_L0 exists: {app.state._current_cc_mask_L0 is not None}")
-        if app.state._current_cc_mask_L0 is not None:
-            print(f"  [DEBUG] _current_cc_mask_L0.any(): {app.state._current_cc_mask_L0.any()}")
+        # Debug output (disabled for performance)
+        # if _DEBUG_SLICE_UPDATE:
+        #     print(f"  [DEBUG] _current_cc_mask_L0 exists: {app.state._current_cc_mask_L0 is not None}")
+        #     if app.state._current_cc_mask_L0 is not None:
+        #         print(f"  [DEBUG] _current_cc_mask_L0.any(): {app.state._current_cc_mask_L0.any()}")
 
         z_L0 = app.state.tracked_state['z_L0']
         label_id = app.state.tracked_state['label_id']
@@ -1239,7 +1402,8 @@ class ImageHost:
             self._update_plane_contour()
         
         app.morphology_view.plotter.render()
-        print(f"  [PLANE] {plane_width:.0f} × {plane_height:.0f} μm @ z={z_world:.1f}")
+        if _DEBUG_SLICE_UPDATE:
+            print(f"  [PLANE] {plane_width:.0f} × {plane_height:.0f} μm @ z={z_world:.1f}")
 
     def _update_plane_contour(self):
         """Update plane contour - use result from _update_2d_view"""

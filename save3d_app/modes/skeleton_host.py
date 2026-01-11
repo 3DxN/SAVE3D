@@ -7,6 +7,10 @@ Morph Modes:
     0: Instance - show single skeleton instance prebuilt mesh
     1: Navigation - sphere navigates, shows local morphology
     2: Selection - draw on skeleton to select regions
+
+OPTIMIZATIONS:
+    - LRU cache for 2D CC labeling (shared with image_host)
+    - GPU-accelerated CC labeling when available
 """
 
 import numpy as np
@@ -18,6 +22,9 @@ import pyvista as pv
 
 from ..controls import _center_on_component, _zoom_to_path_bbox, _clear_morphology_actors
 from ..utils import _hex_to_rgb
+
+# Import shared CC label cache from image_host
+from .image_host import _cc_label_cache, _GPU_CC_AVAILABLE
 
 
 class SkeletonHost:

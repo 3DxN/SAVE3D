@@ -523,6 +523,63 @@ def build_skeleton_graph(skeleton_L2, outer_masks_L2, label_names, voxel_size_L2
     return skeleton_graph
 
 
+def _calculate_dynamic_cache_size(slice_shape, n_labels):
+    """
+    Dynamically calculate optimal cache size based on available memory
+    
+    Parameters:
+    -----------
+    slice_shape : tuple
+        (height, width) of a single slice
+    n_labels : int
+        Number of unique labels
+    
+    Returns:
+    --------
+    max_cache_size : int
+        Maximum number of Z slices to keep in cache
+    """
+    import gc
+    
+    # Estimate memory per slice (int32 labeled array)
+    bytes_per_slice = slice_shape[0] * slice_shape[1] * 4  # int32 = 4 bytes
+    # Each Z slice might have multiple label CC arrays
+    avg_labels_per_slice = min(n_labels, 10)  # Assume ~10 labels per slice on average
+    bytes_per_z = bytes_per_slice * avg_labels_per_slice
+    
+    # Check available memory
+    try:
+        import psutil
+        available_mem = psutil.virtual_memory().available
+        # Use at most 50% of available memory for cache
+        target_mem = available_mem * 0.5
+    except ImportError:
+        # Fallback: assume 4GB available, use 2GB
+        target_mem = 2 * (1024 ** 3)
+    
+    # Check GPU memory if available
+    if GPU_AVAILABLE:
+        try:
+            cp = get_cupy()
+            if cp is not None:
+                device = cp.cuda.Device()
+                free_gpu_mem = device.mem_info[0]
+                # GPU memory is usually more constrained, use 30%
+                gpu_target = free_gpu_mem * 0.3
+                # Use the smaller of CPU and GPU limits
+                target_mem = min(target_mem, gpu_target)
+        except:
+            pass
+    
+    # Calculate max cache size
+    max_cache_size = max(8, int(target_mem / bytes_per_z))
+    
+    # Cap at reasonable maximum (don't cache more than 256 slices)
+    max_cache_size = min(max_cache_size, 256)
+    
+    return max_cache_size
+
+
 def _map_points_to_L0_cc_batch(coords_zyx, labels, labels_L0, factor, use_gpu=True):
     """
     Batch mapping of skeleton points to Level 0 CC
@@ -532,7 +589,9 @@ def _map_points_to_L0_cc_batch(coords_zyx, labels, labels_L0, factor, use_gpu=Tr
     2. Pre-compute all needed L0 CC labels for each Z slice
     3. Vectorized lookup instead of per-point loops
     
-    This is 10-50x faster than per-point processing!
+    
+    - Dynamic cache size based on available RAM/GPU memory
+    - LRU eviction when cache is full
     """
     n_points = len(coords_zyx)
     L0_shape = labels_L0.shape
@@ -543,50 +602,57 @@ def _map_points_to_L0_cc_batch(coords_zyx, labels, labels_L0, factor, use_gpu=Tr
     # Get unique (label, z_L2) combinations
     unique_labels = np.unique(labels[labels > 0])
     
-    # Pre-compute L0 CC labels for all needed Z slices
-    # Key: (label_idx, z0) -> labeled_array (full slice, not sub-region)
-    print(f"    Pre-computing L0 CC labels...")
-    
-    # Determine which Z slices we need at L0
+    # Group points by z_L2 for processing
     z_L2_all = coords_zyx[:, 0]
-    z_L0_needed = set()
-    for z_L2 in np.unique(z_L2_all):
-        for z0 in range(z_L2 * factor, min((z_L2 + 1) * factor, L0_shape[0])):
-            z_L0_needed.add(z0)
+    z_L2_unique = np.unique(z_L2_all)
     
-    z_L0_needed = sorted(z_L0_needed)
-    print(f"    Need {len(z_L0_needed)} L0 slices for {len(unique_labels)} labels")
+    # DYNAMIC CACHE SIZE based on available memory
+    slice_shape = (L0_shape[1], L0_shape[2])
+    MAX_CACHE_SIZE = _calculate_dynamic_cache_size(slice_shape, len(unique_labels))
     
-    # Pre-compute CC labels for each (label, z0) combination
-    # Store as: cc_labels_L0[z0][label_idx] = labeled_array or None
-    cc_labels_L0 = {}
+    print(f"    Processing {n_points:,} points across {len(z_L2_unique)} Z slices...")
+    print(f"    Mode: On-demand CC labeling (dynamic cache)")
+    print(f"    Cache size: {MAX_CACHE_SIZE} Z slices (auto-calculated based on available memory)")
     
-    for z0 in tqdm(z_L0_needed, desc="    Pre-computing L0 CC", unit="slice"):
-        slice_data = labels_L0[z0]
-        if hasattr(slice_data, 'compute'):
-            slice_data = slice_data.compute()
+    # LRU cache for recently used slices
+    cc_cache = {}  # {z0: {label_idx: labeled_array}}
+    cache_order = []
+    
+    def get_cc_label(z0, label_idx):
+        """Get CC label for a specific (z0, label_idx), with caching"""
+        nonlocal cc_cache, cache_order
         
-        cc_labels_L0[z0] = {}
+        if z0 not in cc_cache:
+            # Load slice data
+            slice_data = labels_L0[z0]
+            if hasattr(slice_data, 'compute'):
+                slice_data = slice_data.compute()
+            
+            cc_cache[z0] = {}
+            cache_order.append(z0)
+            
+            # Evict old cache entries if over limit
+            while len(cc_cache) > MAX_CACHE_SIZE:
+                oldest = cache_order.pop(0)
+                del cc_cache[oldest]
+                # Force garbage collection for large arrays
+                import gc
+                gc.collect()
         
-        for label_idx in unique_labels:
+        if label_idx not in cc_cache[z0]:
+            # Compute CC for this label
+            slice_data = labels_L0[z0]
+            if hasattr(slice_data, 'compute'):
+                slice_data = slice_data.compute()
+            
             mask = slice_data == label_idx
             if np.any(mask):
                 labeled, _ = _cc_label_2d(mask, use_gpu=use_gpu)
-                cc_labels_L0[z0][label_idx] = labeled
+                cc_cache[z0][label_idx] = labeled
             else:
-                cc_labels_L0[z0][label_idx] = None
-    
-    # Free GPU memory after pre-computation
-    if use_gpu and GPU_AVAILABLE:
-        cp = get_cupy()
-        if cp is not None:
-            cp.get_default_memory_pool().free_all_blocks()
-    
-    # Now process points - group by z_L2 for better locality
-    print(f"    Mapping {n_points:,} points to L0 CC...")
-    
-    # Group points by z_L2
-    z_L2_unique = np.unique(z_L2_all)
+                cc_cache[z0][label_idx] = None
+        
+        return cc_cache[z0][label_idx]
     
     for z_L2 in tqdm(z_L2_unique, desc="    Mapping by Z slice", unit="z"):
         # Get all points at this z_L2
@@ -617,10 +683,7 @@ def _map_points_to_L0_cc_batch(coords_zyx, labels, labels_L0, factor, use_gpu=Tr
             # Find first valid CC in the L0 region
             found = False
             for z0 in range(z0_start, z0_end):
-                if z0 not in cc_labels_L0:
-                    continue
-                    
-                labeled = cc_labels_L0[z0].get(label_idx)
+                labeled = get_cc_label(z0, label_idx)
                 if labeled is None:
                     continue
                 
@@ -650,6 +713,24 @@ def _map_points_to_L0_cc_batch(coords_zyx, labels, labels_L0, factor, use_gpu=Tr
             
             if not found:
                 z_L0_arr[i] = z0_mid
+        
+        # Clear cache periodically to prevent memory buildup
+        if len(cc_cache) > MAX_CACHE_SIZE // 2:
+            # Free GPU memory
+            if use_gpu and GPU_AVAILABLE:
+                cp = get_cupy()
+                if cp is not None:
+                    cp.get_default_memory_pool().free_all_blocks()
+    
+    # Final cleanup
+    cc_cache.clear()
+    import gc
+    gc.collect()
+    
+    if use_gpu and GPU_AVAILABLE:
+        cp = get_cupy()
+        if cp is not None:
+            cp.get_default_memory_pool().free_all_blocks()
     
     return cc_ids_L0, z_L0_arr
 
