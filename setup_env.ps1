@@ -4,7 +4,6 @@
 #
 # Options:
 #   -GPU    Install GPU acceleration packages (requires NVIDIA CUDA)
-
 param(
     [switch]$GPU
 )
@@ -58,12 +57,11 @@ Write-Host ""
 
 # Verify installation
 Write-Host "Verifying installation..." -ForegroundColor Yellow
-python -c "import napari; import pyvista; import zarr; print('✓ All core packages installed successfully')"
+python -c "import napari; import pyvista; import zarr; print('All core packages installed successfully')"
 
 if ($GPU) {
-    python -c "import cupy; print(f'✓ CuPy GPU: {cupy.cuda.runtime.getDeviceCount()} device(s) available')" 2>$null
+    python -c "import cupy; count = cupy.cuda.runtime.getDeviceCount(); print('CuPy GPU: ' + str(count) + ' device(s) available')" 2>$null
     if ($LASTEXITCODE -ne 0) {
         Write-Host "[!] CuPy GPU not available (CUDA may not be installed)" -ForegroundColor Yellow
     }
 }
-
