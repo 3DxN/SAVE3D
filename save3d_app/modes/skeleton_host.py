@@ -123,6 +123,10 @@ class SkeletonHost:
             # Show sphere widget
             if app.skeleton_view.sphere_widget:
                 app.skeleton_view.sphere_widget.On()
+                try:
+                    app.skeleton_view.sphere_widget.GetSphereProperty().SetOpacity(0.5)
+                except:
+                    pass
         else:
             # No tracking: sphere at first skeleton point, wait for user click
             print("  [INFO] No tracking - waiting for user to click skeleton")
@@ -549,6 +553,9 @@ class SkeletonHost:
         """
         Sphere-based morphology view with dynamic radius based on current CC size
         """
+        import time
+        t_total = time.time()
+
         app = self.app
         
         if not app.morphology_view.global_morph_actors:
@@ -557,9 +564,13 @@ class SkeletonHost:
         sphere_center = np.array(sphere_center)
         
         # Step 1: Find current CC and calculate dynamic radius
+        t0 = time.time()
         range_um = self._get_dynamic_sphere_radius(sphere_center)
+        range_um_sq = range_um * range_um
+        print(f"  [TIMING] _get_dynamic_sphere_radius: {time.time() - t0:.3f}s")
         
         # Step 2: Calculate per-vertex opacity (sphere-based)
+        t0 = time.time()
         for mesh_name, data in app.morphology_view.global_morph_actors.items():
             mesh = data['mesh']
             base_opacity = data['base_opacity']
@@ -568,31 +579,49 @@ class SkeletonHost:
             vertices = mesh.points
             n_points = len(vertices)
             
+            '''
             # Distance to sphere center
             distances = np.linalg.norm(vertices - sphere_center, axis=1)
-            
             # Inside range → show, outside range → hide
-            opacity = np.where(distances <= range_um, base_opacity, 0.0)
+            opacity = np.where(distances <= range_um, base_opacity, 0.0)'''
+
+            diff = vertices - sphere_center
+            distances_sq = np.einsum('ij,ij->i', diff, diff)
             
             # Build RGBA
             rgba = np.zeros((n_points, 4), dtype=np.uint8)
             rgba[:, 0] = int(color[0] * 255)
             rgba[:, 1] = int(color[1] * 255)
             rgba[:, 2] = int(color[2] * 255)
-            rgba[:, 3] = (opacity * 255).astype(np.uint8)
+
+            in_range = distances_sq <= range_um_sq
+            rgba[in_range, 3] = int(base_opacity * 255)
+
+            #rgba[:, 3] = (opacity * 255).astype(np.uint8)
             
             mesh.point_data['rgba'] = rgba
             mesh.Modified()
         
-        # Step 3: Update 2D CC contour (black frame)
-        app.morphology_view.plotter.render()
+        print(f"  [TIMING] vertex opacity : {time.time() - t0:.3f}s")
+
+        t0 = time.time()
         self._update_skeleton_host_contour(sphere_center)
+        print(f"  [TIMING] _update_skeleton_host_contour: {time.time() - t0:.3f}s")
+
+        t0 = time.time()
         self._update_morphology_camera_to_sphere(sphere_center, range_um)
+        print(f"  [TIMING] _update_morphology_camera: {time.time() - t0:.3f}s")
     
         # Step 4: Update guide plane
+        t0 = time.time()
         self._update_skeleton_host_guide_plane(sphere_center)
+        print(f"  [TIMING] _update_skeleton_host_guide_plane: {time.time() - t0:.3f}s")
 
+        t0 = time.time()
         app.morphology_view.plotter.render()
+        print(f"  [TIMING] plotter.render() #2: {time.time() - t0:.3f}s")
+
+        print(f"  [TIMING] _update_skeleton_host_morphology TOTAL: {time.time() - t_total:.3f}s")
 
     def _get_dynamic_sphere_radius(self, sphere_center):
         """
@@ -661,6 +690,9 @@ class SkeletonHost:
         Show current 2D CC black contour on morphology view
         Uses preprocessing cc_id and z_L0
         """
+        import time
+        t_start = time.time()
+
         app = self.app
         
         # Remove old contour
@@ -684,10 +716,13 @@ class SkeletonHost:
             return
         
         # Extract contour from level 0 labels
+        t0 = time.time()
         labels_slice = app.data.lab_full[z_L0]
         if hasattr(labels_slice, 'compute'):
             labels_slice = labels_slice.compute()
-        
+        print(f"    [CONTOUR TIMING] .compute(): {time.time() - t0:.3f}s")
+
+        t0 = time.time()
         label_mask = (labels_slice == label_id)
         
         if not label_mask.any():
@@ -695,18 +730,22 @@ class SkeletonHost:
         
         labeled, _ = ndimage.label(label_mask)
         cc_mask = (labeled == (cc_id + 1))
-        
+        print(f"    [CONTOUR TIMING] ndimage.label: {time.time() - t0:.3f}s")
+
         if not cc_mask.any():
             return
         
+        t0 = time.time()
         contours = measure.find_contours(cc_mask, 0.5)
+        print(f"    [CONTOUR TIMING] find_contours: {time.time() - t0:.3f}s")
         
         if not contours:
             return
         
         # Calculate z_world from z_L0
         z_world = z_L0 * app.data.voxel_size_L0[0]
-        
+
+        t0 = time.time()
         for contour in contours:
             # L0 coords → world coords
             points_3d = np.zeros((len(contour), 3))
@@ -743,7 +782,9 @@ class SkeletonHost:
             
             print(f"  [CONTOUR] {len(points_3d)} pts @ z_world={z_world:.1f} μm")
             break  # Only first contour
-
+        
+        print(f"    [CONTOUR TIMING] add_mesh: {time.time() - t0:.3f}s")
+        print(f"    [CONTOUR TIMING] TOTAL: {time.time() - t_start:.3f}s")
     # =========================================================================
     # MODE 2: SELECTION
     # =========================================================================
@@ -809,7 +850,8 @@ class SkeletonHost:
             interaction_event='always',
             pass_widget=True,
         )
-        
+        self.selection_sphere_widget.ScaleOff()
+
         try:
             prop = self.selection_sphere_widget.GetSphereProperty()
             if prop:
@@ -1087,6 +1129,10 @@ class SkeletonHost:
             # No selection, restore original sphere
             if app.skeleton_view.sphere_widget:
                 app.skeleton_view.sphere_widget.On()
+                try:
+                    app.skeleton_view.sphere_widget.GetSphereProperty().SetOpacity(0.5)
+                except:
+                    pass
 
         self._update_selection_morphology()
         app.skeleton_view.plotter.render()
@@ -1102,6 +1148,9 @@ class SkeletonHost:
         Generate morphology view for selected skeleton region
         Called once after drawing finishes - static display
         """
+        import time
+        t_total = time.time()
+
         app = self.app
         
         if not self.selected_skeleton_indices:
@@ -1112,14 +1161,15 @@ class SkeletonHost:
         print(f"[SELECTION MORPH] Building from {len(self.selected_skeleton_indices)} skeleton points")
         print(f"{'='*60}")
         
-        # === Step 1: Convert selection to path format ===
-        # path_3d = {z_L2: [(label_id, cc_id), ...]}
-        path_3d = {}
-        seen_ccs = set()  # (z, label_id, cc_id) to avoid duplicates
+        # === Step 1: Convert selection to path format (BATCH READ) ===
+        t0 = time.time()
         
-        # Cache: (label_id, z_L2) → labeled array
-        labeled_cache = {}
-
+        # First pass: collect unique (label_name, z) pairs
+        from collections import defaultdict
+        
+        slices_needed = set()  # {(label_name, z_L2), ...}
+        points_data = []  # [(z_L2, y_L2, x_L2, label_id, label_name), ...]
+        
         for idx in self.selected_skeleton_indices:
             z_L2 = int(app.data.skeleton_coords_voxel[idx, 0])
             y_L2 = int(app.data.skeleton_coords_voxel[idx, 1])
@@ -1129,25 +1179,48 @@ class SkeletonHost:
             if label_id == 0:
                 continue
             
-            # Calculate CC ID at L2 (consistent with cc_metadata)
-            cache_key = (label_id, z_L2)
-            if cache_key not in labeled_cache:
-                label_name = app.data.label_names[label_id - 1]
-                slice_mask = app.data.outer_masks_L2[label_name][z_L2]
-                if hasattr(slice_mask, 'compute'):
-                    slice_mask = slice_mask.compute()
-                slice_mask = slice_mask > 0
+            label_name = app.data.label_names[label_id - 1]
+            slices_needed.add((label_name, z_L2))
+            points_data.append((z_L2, y_L2, x_L2, label_id, label_name))
+        
+        # Group by label for batch read
+        label_z_map = defaultdict(set)  # {label_name: {z1, z2, ...}}
+        for label_name, z_L2 in slices_needed:
+            label_z_map[label_name].add(z_L2)
+        
+        # Batch read and CC label
+        t1 = time.time()
+        labeled_cache = {}  # {(label_id, z_L2): labeled_array}
+        
+        for label_name, z_set in label_z_map.items():
+            z_list = sorted(z_set)
+            z_min, z_max = min(z_list), max(z_list) + 1
+            
+            # Batch read entire Z range
+            block = app.data.outer_masks_L2[label_name][z_min:z_max].compute()
+            
+            label_id = app.data.label_names.index(label_name) + 1
+            
+            for z in z_list:
+                z_rel = z - z_min
+                slice_mask = block[z_rel] > 0
                 if slice_mask.any():
                     labeled, _ = ndimage.label(slice_mask)
-                    labeled_cache[cache_key] = labeled
+                    labeled_cache[(label_id, z)] = labeled
                 else:
-                    labeled_cache[cache_key] = None
-            
-            labeled = labeled_cache[cache_key]
+                    labeled_cache[(label_id, z)] = None
+        
+        print(f"  [TIMING] Step 1 batch read + label: {time.time() - t1:.3f}s")
+        
+        # Second pass: build path_3d
+        path_3d = {}
+        seen_ccs = set()
+        
+        for z_L2, y_L2, x_L2, label_id, label_name in points_data:
+            labeled = labeled_cache.get((label_id, z_L2))
             if labeled is None:
                 continue
             
-            # Get L2 CC ID (0-indexed)
             cc_id_1indexed = labeled[y_L2, x_L2]
             if cc_id_1indexed == 0:
                 continue
@@ -1162,6 +1235,8 @@ class SkeletonHost:
                 path_3d[z_L2] = []
             path_3d[z_L2].append((label_id, cc_id))
         
+        print(f"  [TIMING] Step 1 TOTAL: {time.time() - t0:.3f}s")
+        
         if not path_3d:
             print("  ✗ No valid CCs found")
             return
@@ -1170,18 +1245,24 @@ class SkeletonHost:
         print(f"  Z range: [{min(path_3d.keys())}:{max(path_3d.keys())}]")
         
         # === Step 2: Calculate union bbox ===
+        t0 = time.time()
         xy_bbox = app.cc_tracker._calculate_union_xy_bbox_from_path(path_3d)
+        print(f"  [TIMING] Step 2 (bbox): {time.time() - t0:.3f}s")
+
         if xy_bbox is None:
             print("  ✗ Failed to calculate bbox")
             return
         
         # === Step 3: Extract masks ===
+        t0 = time.time()
         label_masks = app.cc_tracker._extract_path_ccs_in_bbox(path_3d, xy_bbox)
-        
+        print(f"  [TIMING] Step 3 (extract masks): {time.time() - t0:.3f}s")
+
         # === Step 4: Clear old morphology actors ===
         _clear_morphology_actors(app)
         
         # === Step 5: Create surfaces per label ===
+        t0 = time.time()
         z_min = min(path_3d.keys())
         
         for label_name, masks in label_masks.items():
@@ -1219,6 +1300,8 @@ class SkeletonHost:
                     )
                     print(f"    ✓ {label_name} inner: {inner_mesh.n_points:,} pts")
         
+        print(f"  [TIMING] Step 5 (create surfaces): {time.time() - t0:.3f}s")
+
         # === Step 6: Zoom to selection ===
         z_center = (min(path_3d.keys()) + max(path_3d.keys())) // 2
         _zoom_to_path_bbox(app, xy_bbox, z_center)
@@ -1474,9 +1557,11 @@ class SkeletonHost:
             app.napari_view.boundary_layer.data = []
             return
         
+        '''
         labels_slice = app.data.lab_full[z_L0]
         if hasattr(labels_slice, 'compute'):
-            labels_slice = labels_slice.compute()
+            labels_slice = labels_slice.compute()'''
+        labels_slice = _slice_data_cache.get_label_slice(app.data.lab_full, z_L0)
         
         label_mask = (labels_slice == label_id)
         
@@ -1612,6 +1697,7 @@ class SkeletonHost:
             interaction_event='always',
             pass_widget=True,
         )
+        self.selection_sphere_widget.ScaleOff()
 
         try:
             prop = app.skeleton_view.sphere_widget.GetSphereProperty()
@@ -1672,6 +1758,7 @@ class SkeletonHost:
             interaction_event='always',
             pass_widget=True,
         )
+        self.selection_sphere_widget.ScaleOff()
 
         try:
             prop = app.skeleton_view.sphere_widget.GetSphereProperty()
@@ -1713,9 +1800,11 @@ class SkeletonHost:
             return
         
         # Get CC mask from level 0 labels
+        labels_slice = _slice_data_cache.get_label_slice(app.data.lab_full, z_L0)
+        '''
         labels_slice = app.data.lab_full[z_L0]
         if hasattr(labels_slice, 'compute'):
-            labels_slice = labels_slice.compute()
+            labels_slice = labels_slice.compute()'''
         
         label_mask = (labels_slice == label_id)
         if not label_mask.any():
