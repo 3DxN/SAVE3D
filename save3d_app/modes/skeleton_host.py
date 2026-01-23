@@ -24,7 +24,7 @@ from ..controls import _center_on_component, _zoom_to_path_bbox, _clear_morpholo
 from ..utils import _hex_to_rgb
 
 # Import shared CC label cache from image_host
-from .image_host import _cc_label_cache, _GPU_CC_AVAILABLE
+from .image_host import _cc_label_cache, _slice_data_cache, _GPU_CC_AVAILABLE
 
 
 class SkeletonHost:
@@ -57,7 +57,16 @@ class SkeletonHost:
         self._mode_changing = False
         self._skip_instance_clear = False
         self._selection_sphere_cleaned = False
-    
+
+        # Selection highlight throttle
+        self._highlight_update_timer = QtCore.QTimer()
+        self._highlight_update_timer.setSingleShot(True)
+        self._highlight_update_timer.timeout.connect(self._update_selection_highlight)
+
+        self._pending_sphere_pos = None
+        self._sphere_update_timer = QtCore.QTimer()
+        self._sphere_update_timer.setSingleShot(True)
+        self._sphere_update_timer.timeout.connect(self._on_sphere_update_timeout)
     # =========================================================================
     # ENTRY POINTS - External callbacks
     # =========================================================================
@@ -150,6 +159,28 @@ class SkeletonHost:
         except:
             pass
     
+    def _on_sphere_drag_lightweight(self, world_pos):
+        app = self.app
+        
+        if app.state.host_mode != 'skeleton':
+            return
+        
+        dist, idx = app.data.skeleton_kdtree.query(world_pos)
+        label_id = int(app.data.skeleton_labels[idx])
+        
+        if label_id > 0:
+            label_name = app.data.label_names[label_id - 1]
+            z_world = world_pos[2]
+            app.slice_info.setText(f"Z = {z_world:.1f} μm  |  {label_name} (dragging...)")
+        
+        self._pending_sphere_pos = world_pos.copy()
+        self._sphere_update_timer.start(80)  
+
+    def _on_sphere_update_timeout(self):
+        if self._pending_sphere_pos is not None:
+            self._on_sphere_position_changed(self._pending_sphere_pos)
+            self._pending_sphere_pos = None
+
     def _on_sphere_position_changed(self, world_pos):
         """Handle sphere position change in Skeleton Host mode"""
         app = self.app
@@ -854,7 +885,7 @@ class SkeletonHost:
         self.last_drawing_idx = idx
         
         # Update visualization
-        self._update_selection_highlight()
+        self._highlight_update_timer.start(50)
     '''
     def _on_selection_brush_moved(self, center, widget):
         """Callback when selection brush is dragged"""
@@ -954,6 +985,7 @@ class SkeletonHost:
             current = parent[current]
         return True    
 
+    
     def _update_selection_highlight(self):
         """Update visual highlight for selected skeleton region"""
         app = self.app
@@ -1364,20 +1396,19 @@ class SkeletonHost:
             return
         
         # Extract from level 0 labels
-        labels_slice = app.data.lab_full[z_L0]
-        if hasattr(labels_slice, 'compute'):
-            labels_slice = labels_slice.compute()
-        
+        # Extract from level 0 labels (with cache)
+        labels_slice = _slice_data_cache.get_label_slice(app.data.lab_full, z_L0)
+
         # Create binary mask for this label
         label_mask = (labels_slice == label_id)
-        
+
         if not label_mask.any():
             print(f"  ⚠ Label {label_id} not found at z={z_L0}")
             app.napari_view.boundary_layer.data = []
             return
-        
-        # Label CCs
-        labeled, num_cc = ndimage.label(label_mask)
+
+        # Label CCs (with cache)
+        labeled, num_cc = _cc_label_cache.get(label_id + 2000, z_L0, label_mask)
         
         # Directly use preprocessing cc_id (0-indexed → 1-indexed for labeled)
         cc_mask = (labeled == (cc_id + 1))
@@ -1571,7 +1602,7 @@ class SkeletonHost:
             app.state.sphere_position = nearest_pos.copy()
             
             if app.state.host_mode == 'skeleton':
-                skeleton_host._on_sphere_position_changed(nearest_pos)
+                skeleton_host._on_sphere_drag_lightweight(nearest_pos)
         
         app.skeleton_view.sphere_widget = app.skeleton_view.plotter.add_sphere_widget(
             callback=on_sphere_drag,
@@ -1631,7 +1662,7 @@ class SkeletonHost:
             app.state.sphere_position = nearest_pos.copy()
             
             if app.state.host_mode == 'skeleton':
-                skeleton_host._on_sphere_position_changed(nearest_pos)
+                skeleton_host._on_sphere_drag_lightweight(nearest_pos)
         
         app.skeleton_view.sphere_widget = app.skeleton_view.plotter.add_sphere_widget(
             callback=on_restricted_sphere_drag,

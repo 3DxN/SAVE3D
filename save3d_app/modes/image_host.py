@@ -23,6 +23,8 @@ from skimage import measure
 from qtpy import QtCore, QtWidgets
 import pyvista as pv
 from functools import lru_cache
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 
 from ..controls import _center_on_component, _zoom_to_path_bbox, _clear_morphology_actors
 from ..utils import _hex_to_rgb
@@ -155,6 +157,128 @@ class _CCLabelCache:
 # Global cache instances
 _cc_label_cache = _CCLabelCache(maxsize=64)
 _slice_data_cache = _SliceDataCache(maxsize=32)
+
+class _MeshCache:
+    """
+    LRU cache for loaded meshes to avoid redundant disk I/O.
+    Thread-safe for parallel loading.
+    """
+    
+    def __init__(self, maxsize=200, max_memory_mb=1000):
+        self.maxsize = maxsize
+        self.max_memory_bytes = max_memory_mb * 1024 * 1024
+        self.cache = {}  # {filepath_str: pv.PolyData}
+        self.access_order = []
+        self.memory_usage = 0
+        self._lock = threading.Lock()
+    
+    def _estimate_mesh_size(self, mesh):
+        """Estimate memory usage of a PyVista mesh in bytes"""
+        if mesh is None:
+            return 0
+        return mesh.n_points * 24 + mesh.n_cells * 32
+    
+    def get(self, filepath):
+        """Get cached mesh or None"""
+        with self._lock:
+            key = str(filepath)
+            if key in self.cache:
+                if key in self.access_order:
+                    self.access_order.remove(key)
+                self.access_order.append(key)
+                return self.cache[key]
+            return None
+    
+    def put(self, filepath, mesh):
+        """Cache a mesh"""
+        with self._lock:
+            key = str(filepath)
+            if key in self.cache:
+                return
+            
+            mesh_size = self._estimate_mesh_size(mesh)
+            
+            # Evict if over limits
+            while (self.memory_usage + mesh_size > self.max_memory_bytes or 
+                   len(self.cache) >= self.maxsize) and self.access_order:
+                oldest = self.access_order.pop(0)
+                if oldest in self.cache:
+                    old_mesh = self.cache.pop(oldest)
+                    self.memory_usage -= self._estimate_mesh_size(old_mesh)
+            
+            self.cache[key] = mesh
+            self.access_order.append(key)
+            self.memory_usage += mesh_size
+    
+    def clear(self):
+        """Clear all cached meshes"""
+        with self._lock:
+            self.cache.clear()
+            self.access_order.clear()
+            self.memory_usage = 0
+
+
+# Global mesh cache
+_mesh_cache = _MeshCache(maxsize=200, max_memory_mb=1000)
+
+
+def _load_single_mesh(filepath):
+    """Load a single mesh, using cache if available."""
+    cached = _mesh_cache.get(filepath)
+    if cached is not None:
+        return cached
+    
+    try:
+        mesh = pv.read(str(filepath))
+        _mesh_cache.put(filepath, mesh)
+        return mesh
+    except Exception as e:
+        print(f"  [WARN] Failed to load mesh {filepath}: {e}")
+        return None
+
+
+def _load_meshes_parallel(mesh_paths, max_workers=6):
+    """
+    Load multiple meshes in parallel.
+    
+    Args:
+        mesh_paths: List of (key, filepath) tuples
+        max_workers: Number of parallel threads
+    
+    Returns:
+        Dict of {key: mesh}
+    """
+    results = {}
+    total = len(mesh_paths)
+    
+    if total == 0:
+        return results
+    
+    # Small number: sequential is fine
+    if total <= 3:
+        for key, filepath in mesh_paths:
+            mesh = _load_single_mesh(filepath)
+            if mesh is not None:
+                results[key] = mesh
+        return results
+    
+    # Parallel loading
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_key = {}
+        for key, filepath in mesh_paths:
+            future = executor.submit(_load_single_mesh, filepath)
+            future_to_key[future] = key
+        
+        for future in as_completed(future_to_key):
+            key = future_to_key[future]
+            try:
+                mesh = future.result()
+                if mesh is not None:
+                    results[key] = mesh
+            except Exception as e:
+                print(f"  [WARN] Mesh load failed for {key}: {e}")
+    
+    return results
 
 
 class ImageHost:
@@ -989,10 +1113,15 @@ class ImageHost:
             return
         
         # === Mode 2: Z Navigation (original logic) ===
+        import time
+        t_total = time.time()
+        
+        t0 = time.time()
         path_3d = app.cc_tracker._propagate_cc_path(
             label_id, z_L2, cc_id, cross_label=True
         )
-        
+        print(f"  [TIMING] _propagate_cc_path: {time.time() - t0:.3f}s")
+
         if not path_3d:
             print("[ERROR] No path found")
             return
@@ -1011,12 +1140,17 @@ class ImageHost:
         print(f"  Render path spans z=[{min(render_path.keys())}:{max(render_path.keys())}]")
         
         # === Step 3: Calculate bbox ===
+        t0 = time.time()
         xy_bbox = app.cc_tracker._calculate_union_xy_bbox_from_path(render_path)
+        print(f"  [TIMING] _calculate_union_xy_bbox: {time.time() - t0:.3f}s")
         
         # === Step 4: Extract masks ===
+        t0 = time.time()
         label_masks = app.cc_tracker._extract_path_ccs_in_bbox(render_path, xy_bbox)
-        
+        print(f"  [TIMING] _extract_path_ccs_in_bbox: {time.time() - t0:.3f}s")
+
         # === Step 5: Create surfaces per label ===
+        t0 = time.time()
         z_min = min(render_path.keys())
         
         for current_label_name, masks in label_masks.items():
@@ -1026,7 +1160,9 @@ class ImageHost:
             label_color = _hex_to_rgb(app.data.label_colors[current_label_name])
             
             # Outer mesh
+            t_mesh = time.time()
             outer_mesh = app.mesh_builder._create_surface(masks['outer'], xy_bbox, z_min)
+            print(f"    [TIMING] _create_surface outer: {time.time() - t_mesh:.3f}s")
             
             if outer_mesh and outer_mesh.n_points > 0:
                 app.morphology_view.outer_volume_actors[current_label_name] = app.morphology_view.plotter.add_mesh(
@@ -1041,8 +1177,10 @@ class ImageHost:
             
             # Inner mesh (only if has_inner_mask)
             if app.data.has_inner_mask and np.sum(masks['inner']) > 0:
+                t_mesh = time.time()
                 inner_mesh = app.mesh_builder._create_surface(masks['inner'], xy_bbox, z_min)
-                
+                print(f"    [TIMING] _create_surface inner: {time.time() - t_mesh:.3f}s")
+
                 if inner_mesh and inner_mesh.n_points > 0:
                     app.morphology_view.inner_mesh_actors[current_label_name] = app.morphology_view.plotter.add_mesh(
                         inner_mesh,
@@ -1053,7 +1191,8 @@ class ImageHost:
                         name=f'inner_{current_label_name}'
                     )
                     print(f"    ✓ {current_label_name} inner: {inner_mesh.n_points:,} pts")
-        
+
+        print(f"  [TIMING] Step 5 (surfaces + add_mesh): {time.time() - t0:.3f}s")
         # === Step 6: Zoom ===
         _zoom_to_path_bbox(app, xy_bbox, z_L2)
         
@@ -1069,6 +1208,7 @@ class ImageHost:
         
         app.morphology_view.plotter.render()
         
+        print(f"\n  [TIMING] TOTAL: {time.time() - t_total:.3f}s")
         print(f"\n[MORPHOLOGY] Complete!")
         print(f"{'='*80}\n")
 
@@ -1174,7 +1314,7 @@ class ImageHost:
         app.morphology_view.plotter.render()
         
         print(f"[INSTANCE MODE] Complete!")
-
+    '''
     def _render_image_label_mode(self):
         """Image Host Mode 1: Show all prebuilt meshes for current label"""
         app = self.app
@@ -1241,6 +1381,101 @@ class ImageHost:
         print(f"  ✓ All {label_name} meshes loaded")
         
         # === Step 4: Guide plane + contour ===
+        self._update_image_host_guide_plane()
+        
+        if app.show_plane_contour_chk.isChecked():
+            app.show_plane_contour_chk.blockSignals(True)
+            app.show_plane_contour_chk.setChecked(False)
+            app.show_plane_contour_chk.setChecked(True)
+            app.show_plane_contour_chk.blockSignals(False)
+            self._update_plane_contour()
+        
+        app.morphology_view.plotter.reset_camera()
+        app.morphology_view.plotter.render()
+        
+        print(f"[LABEL MODE] Complete!")
+    '''
+    def _render_image_label_mode(self):
+        """Image Host Mode 1: Show all prebuilt meshes for current label (PARALLEL)"""
+        app = self.app
+        
+        label_name = app.state.tracked_state['label_name']
+        label_id = app.state.tracked_state['label_id']
+        z_L2 = app.state.tracked_state['z_L2']
+        cc_id = app.state.tracked_state['cc_id']
+        
+        print(f"[LABEL MODE] {label_name} @ z={z_L2}")
+        
+        if app.data.image_host_mesh_info is None:
+            print("[ERROR] image_host_meshes.json not loaded")
+            return
+        
+        if label_name not in app.data.image_host_mesh_info['labels']:
+            print(f"[ERROR] {label_name} not in image_host_mesh_info")
+            return
+        
+        # === Step 1: Build label-only path ===
+        path_3d = app.cc_tracker._propagate_cc_path(
+            label_id, z_L2, cc_id, cross_label=False
+        )
+        if path_3d:
+            app.state.cc_path_3d = path_3d
+            print(f"  Label path: z=[{min(path_3d.keys())}:{max(path_3d.keys())}]")
+        
+        # === Step 2: Store current label ===
+        self._current_label_mode_label = label_name
+        
+        # === Step 3: Collect mesh paths ===
+        label_info = app.data.image_host_mesh_info['labels'][label_name]
+        label_color = _hex_to_rgb(app.data.label_colors[label_name])
+        
+        mesh_paths = []  # [(key, filepath), ...]
+        mesh_types = {}  # {key: 'outer' or 'inner'}
+        
+        for mesh_info in label_info['meshes']:
+            cc_3d_id = mesh_info['id']
+            
+            if mesh_info['outer_mesh']:
+                key = f'outer_{label_name}_{cc_3d_id}'
+                filepath = app.data.zarr_path.parent / mesh_info['outer_mesh']
+                mesh_paths.append((key, filepath))
+                mesh_types[key] = 'outer'
+            
+            if app.data.has_inner_mask and mesh_info.get('inner_mesh'):
+                key = f'inner_{label_name}_{cc_3d_id}'
+                filepath = app.data.zarr_path.parent / mesh_info['inner_mesh']
+                mesh_paths.append((key, filepath))
+                mesh_types[key] = 'inner'
+        
+        print(f"  Loading {len(mesh_paths)} meshes (parallel)...")
+        
+        # === Step 4: Parallel load ===
+        import time
+        t0 = time.time()
+        loaded_meshes = _load_meshes_parallel(mesh_paths, max_workers=6)
+        print(f"  ✓ Loaded {len(loaded_meshes)} meshes in {time.time()-t0:.2f}s")
+        
+        # === Step 5: Add to plotter ===
+        plotter = app.morphology_view.plotter
+        plotter.suppress_rendering = True  
+        
+        try:
+            for key, mesh in loaded_meshes.items():
+                mesh_type = mesh_types.get(key, 'outer')
+                opacity = app.morphology_view.outer_opacity if mesh_type == 'outer' else app.morphology_view.inner_opacity
+                
+                actor = plotter.add_mesh(
+                    mesh,
+                    color=label_color,
+                    opacity=opacity,
+                    smooth_shading=True,
+                    name=key
+                )
+                app.morphology_view.label_mode_actors[key] = actor
+        finally:
+            plotter.suppress_rendering = False  
+        
+        # === Step 6: Guide plane + contour ===
         self._update_image_host_guide_plane()
         
         if app.show_plane_contour_chk.isChecked():
