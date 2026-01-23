@@ -206,7 +206,8 @@ class SkeletonViewController:
             interaction_event='always',
             pass_widget=True,
         )
-        
+        self.sphere_widget.ScaleOff()
+
         try:
             prop = self.sphere_widget.GetSphereProperty()
             if prop:
@@ -215,6 +216,10 @@ class SkeletonViewController:
             pass
     
         # Initially off (Image Host mode uses marker_actor)
+        try:
+            self.sphere_widget.GetSphereProperty().SetOpacity(0)
+        except:
+            pass
         self.sphere_widget.Off()
         
         # === Right-click Jump (only in Skeleton Host) ===
