@@ -261,7 +261,7 @@ def prebuild_instance_meshes(instances_info, skeleton_points_data,
         
         if outer_mesh is not None:
             outer_file = f"inst_{inst_id:04d}_outer.vtk"
-            outer_mesh.save(str(mesh_dir / outer_file))
+            outer_mesh.save(str(mesh_dir / outer_file), binary=True)
             inst['outer_mesh'] = f"skeleton_instance_meshes/{outer_file}"
         else:
             inst['outer_mesh'] = None
@@ -273,7 +273,7 @@ def prebuild_instance_meshes(instances_info, skeleton_points_data,
             
             if inner_mesh is not None:
                 inner_file = f"inst_{inst_id:04d}_inner.vtk"
-                inner_mesh.save(str(mesh_dir / inner_file))
+                inner_mesh.save(str(mesh_dir / inner_file), binary=True)
                 inst['inner_mesh'] = f"skeleton_instance_meshes/{inner_file}"
             else:
                 inst['inner_mesh'] = None
@@ -337,7 +337,7 @@ def _build_single_mesh(cc_id, labeled_3d, outer_mask, inner_mask, voxel_size_L2,
         
         if mesh.n_points > 0:
             outer_file = f"cc_{cc_id:04d}_outer.vtk"
-            mesh.save(str(label_mesh_dir / outer_file))
+            mesh.save(str(label_mesh_dir / outer_file), binary=True)
             mesh_info['outer_mesh'] = f"image_host_meshes/{label_name}/{outer_file}"
             
     except Exception as e:
@@ -364,7 +364,7 @@ def _build_single_mesh(cc_id, labeled_3d, outer_mask, inner_mask, voxel_size_L2,
                 
                 if mesh.n_points > 0:
                     inner_file = f"cc_{cc_id:04d}_inner.vtk"
-                    mesh.save(str(label_mesh_dir / inner_file))
+                    mesh.save(str(label_mesh_dir / inner_file), binary=True)
                     mesh_info['inner_mesh'] = f"image_host_meshes/{label_name}/{inner_file}"
                     
             except Exception:
@@ -586,7 +586,7 @@ def _build_mesh_batch(cc_ids, labeled_3d, outer_mask, inner_mask, voxel_size_L2,
         if mesh is not None and mesh.n_points > 0:
             try:
                 outer_file = f"cc_{cc_id:04d}_outer.vtk"
-                mesh.save(str(label_mesh_dir / outer_file))
+                mesh.save(str(label_mesh_dir / outer_file), binary=True)
                 mesh_info['outer_mesh'] = f"image_host_meshes/{label_name}/{outer_file}"
             except Exception:
                 pass
@@ -600,7 +600,7 @@ def _build_mesh_batch(cc_ids, labeled_3d, outer_mask, inner_mask, voxel_size_L2,
                 if mesh is not None and mesh.n_points > 0:
                     try:
                         inner_file = f"cc_{cc_id:04d}_inner.vtk"
-                        mesh.save(str(label_mesh_dir / inner_file))
+                        mesh.save(str(label_mesh_dir / inner_file), binary=True)
                         mesh_info['inner_mesh'] = f"image_host_meshes/{label_name}/{inner_file}"
                     except Exception:
                         pass
@@ -935,7 +935,7 @@ def prebuild_skeleton_meshes(skeleton_L2, outer_masks_L2, label_names,
         
         if mesh is not None and mesh.n_cells > 0:
             mesh_file = f"skeleton_{label_name}.vtk"
-            mesh.save(str(mesh_dir / mesh_file))
+            mesh.save(str(mesh_dir / mesh_file), binary=True)
             return {
                 'label_name': label_name,
                 'path': f"skeleton_meshes/{mesh_file}",
@@ -1077,7 +1077,7 @@ def _build_single_morphology_mesh(args):
         
         if mesh is not None and mesh.n_points > 0:
             output_path = mesh_dir / f"outer_{label_name}.vtk"
-            mesh.save(str(output_path))
+            mesh.save(str(output_path), binary=True)
             
             result['meshes'][f'outer_{label_name}'] = {
                 'path': str(output_path.name),
@@ -1092,7 +1092,7 @@ def _build_single_morphology_mesh(args):
         
         if mesh is not None and mesh.n_points > 0:
             output_path = mesh_dir / f"inner_{label_name}.vtk"
-            mesh.save(str(output_path))
+            mesh.save(str(output_path), binary=True)
             
             result['meshes'][f'inner_{label_name}'] = {
                 'path': str(output_path.name),
