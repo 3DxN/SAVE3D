@@ -116,7 +116,7 @@ def main():
     SKELETON_L2 = 'output_skeleton_32x_092625.tiff'
     
     # Output
-    OUT_ZARR = 'prostate_pathology9_gpu.zarr'
+    OUT_ZARR = 'prostate_pathology10_gpu.zarr'
     
     # ========= INPUT FORMAT SELECTION =========
     # Choose ONE of the following input formats:
