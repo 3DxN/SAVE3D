@@ -192,7 +192,7 @@ class SkeletonViewController:
             app.state.sphere_position = nearest_pos.copy()
             
             if app.state.host_mode == 'skeleton':
-                app.skeleton_host._on_sphere_position_changed(nearest_pos)
+                app.skeleton_host._on_sphere_drag_lightweight(nearest_pos)
         
         skeleton_radius_voxels = 3
         skeleton_radius_um = skeleton_radius_voxels * data.voxel_size_L2[0]
