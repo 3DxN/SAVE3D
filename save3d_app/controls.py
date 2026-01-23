@@ -624,7 +624,7 @@ def _set_active_view(app, view_name, event):
     else:
         QtInteractor.mousePressEvent(app.morphology_view.plotter.interactor, event)
 
-
+'''
 def _clear_morphology_actors(app):
     """Clear ALL morphology view actors - both Image Host and Skeleton Host"""
     
@@ -695,7 +695,66 @@ def _clear_morphology_actors(app):
     # Reset dicts
     app.morphology_view.outer_volume_actors = {}
     app.morphology_view.inner_mesh_actors = {}
+'''
 
+def _clear_morphology_actors(app):
+    """Clear ALL morphology view actors - OPTIMIZED batch removal"""
+    
+    plotter = app.morphology_view.plotter
+    renderer = plotter.renderer  # Direct VTK access for speed
+    
+    # Collect all actors to remove
+    actors_to_remove = []
+    
+    # === Image Host actors ===
+    if hasattr(app.morphology_view, 'outer_volume_actors'):
+        actors_to_remove.extend(app.morphology_view.outer_volume_actors.values())
+    
+    if hasattr(app.morphology_view, 'inner_mesh_actors'):
+        actors_to_remove.extend(app.morphology_view.inner_mesh_actors.values())
+    
+    # === Label mode actors (usually the most) ===
+    if hasattr(app.morphology_view, 'label_mode_actors'):
+        actors_to_remove.extend(app.morphology_view.label_mode_actors.values())
+    
+    # Image Host plane/contour/scale
+    for attr in ['plane_actor', 'contour_actor', 'scale_line_actor', 'scale_text_actor']:
+        actor = getattr(app.morphology_view, attr, None)
+        if actor:
+            actors_to_remove.append(actor)
+            setattr(app.morphology_view, attr, None)
+    
+    # === Skeleton Host actors ===
+    if app.morphology_view.skeleton_host_contour_actor:
+        actors_to_remove.append(app.morphology_view.skeleton_host_contour_actor)
+        app.morphology_view.skeleton_host_contour_actor = None
+    
+    for attr in ['skeleton_host_plane_actor', 'skeleton_host_scale_actor', 'skeleton_host_scale_text_actor']:
+        actor = getattr(app.morphology_view, attr, None)
+        if actor:
+            actors_to_remove.append(actor)
+            setattr(app.morphology_view, attr, None)
+    
+    # === Skeleton Host global morph actors ===
+    if hasattr(app.morphology_view, 'global_morph_actors'):
+        for mesh_name, data in app.morphology_view.global_morph_actors.items():
+            if 'actor' in data:
+                actors_to_remove.append(data['actor'])
+    
+    # === Batch remove using VTK directly (faster than PyVista wrapper) ===
+    for actor in actors_to_remove:
+        if actor is not None:
+            try:
+                renderer.RemoveActor(actor)
+            except:
+                pass
+    
+    # Reset dicts (after removal)
+    app.morphology_view.outer_volume_actors = {}
+    app.morphology_view.inner_mesh_actors = {}
+    app.morphology_view.label_mode_actors = {}
+    app.morphology_view.global_morph_actors = {}
+    
 def _zoom_to_path_bbox(app, xy_bbox, z_current):
     """Zoom to path bbox - preserve camera orientation"""
     center_x = (xy_bbox['x_min'] + xy_bbox['x_max']) / 2 * app.data.voxel_size_L2[2]
