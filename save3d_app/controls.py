@@ -223,12 +223,26 @@ def _on_camera_sync_toggle(app):
 
 def _update_visibility(app):
     """Toggle visibility of various elements"""
-    app.napari_view.boundary_layer.visible = app.show_boundary_chk.isChecked()
     
+    if app.state.host_mode == 'skeleton':
+        renderer = app.skeleton_view.plotter.renderer
+        actors = renderer.GetActors()
+        actors.InitTraversal()
+        print(f"[DEBUG] Total actors in skeleton_view renderer: {actors.GetNumberOfItems()}")
+        for i in range(actors.GetNumberOfItems()):
+            actor = actors.GetNextActor()
+            bounds = actor.GetBounds() if actor else None
+            vis = actor.GetVisibility() if actor else None
+            print(f"  Actor {i}: visible={vis}, bounds={bounds}")
+
+    # Marker visibility
     if app.skeleton_view.black_marker_actor:
-        app.skeleton_view.black_marker_actor.visibility = app.show_marker_chk.isChecked()
         if app.state.host_mode == 'image':
+            app.skeleton_view.black_marker_actor.visibility = app.show_marker_chk.isChecked()
             app.skeleton_view.plotter.render()
+        else:
+            # Skeleton Host mode: marker always hidden
+            app.skeleton_view.black_marker_actor.visibility = False
     
     plane_visible = app.show_plane_chk.isChecked()
 
@@ -300,6 +314,7 @@ def _update_visibility(app):
         app.morphology_view.skeleton_host_contour_actor.visibility = app.show_plane_contour_chk.isChecked()
     
     app.morphology_view.plotter.render()
+    #app.skeleton_view.plotter.render()
 
 # =============================================================================
 # SHARED VIEW OPERATIONS (used by both modes)
