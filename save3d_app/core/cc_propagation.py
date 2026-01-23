@@ -5,6 +5,7 @@ CC Path Propagation Module
 
 import numpy as np
 from scipy import ndimage
+import time
 
 
 class CCPathTracker:
@@ -226,19 +227,18 @@ class CCPathTracker:
 
     def _extract_path_ccs_in_bbox(self, path_3d, xy_bbox):
         """
-        Extract ONLY CCs on path within bbox (filter out junk)
-        
-        Returns:
-            label_masks: {label_name: {'outer': 3D_mask, 'inner': 3D_mask}}
+        Extract ONLY CCs on path within bbox - BATCH READ version (fixed)
         """
-        # Get Z range from path
+        import time
+        t_start = time.time()
+        
         z_min = min(path_3d.keys())
         z_max = max(path_3d.keys()) + 1
         nz = z_max - z_min
         ny = xy_bbox['y_max'] - xy_bbox['y_min']
         nx = xy_bbox['x_max'] - xy_bbox['x_min']
         
-        # Initialize masks for each label
+        # Initialize masks
         label_masks = {}
         for label_name in self.label_names:
             label_masks[label_name] = {
@@ -246,46 +246,64 @@ class CCPathTracker:
                 'inner': np.zeros((nz, ny, nx), dtype=np.uint8)
             }
         
-        # Extract CCs layer by layer
-        print(f"  Extracting path CCs (z=[{z_min}:{z_max}])...")
+        print(f"  Extracting path CCs (z=[{z_min}:{z_max}], batch read)...")
         
+        # === Step 1: Find which labels are in path ===
+        labels_in_path = set()
+        for z, ccs in path_3d.items():
+            for label_id, cc_id in ccs:
+                labels_in_path.add(self.label_names[label_id - 1])
+        
+        # === Step 2: Batch read FULL 3D blocks (no XY crop yet) ===
+        t0 = time.time()
+        outer_blocks = {}  # {label_name: 3D array}
+        inner_blocks = {}
+        
+        for label_name in labels_in_path:
+            # Read entire Z range, FULL XY (for correct CC labeling)
+            outer_blocks[label_name] = self.outer_masks_L2[label_name][z_min:z_max].compute()
+            
+            if label_name in self.inner_masks_L2:
+                inner_blocks[label_name] = self.inner_masks_L2[label_name][z_min:z_max].compute()
+        
+        print(f"    [TIMING] batch .compute(): {time.time() - t0:.3f}s ({len(labels_in_path)} labels)")
+        
+        # === Step 3: Process slices (CC label on FULL slice, then crop) ===
+        t0 = time.time()
         for z in range(z_min, z_max):
             if z not in path_3d:
                 continue
             
+            z_rel = z - z_min
+            
             for label_id, cc_id in path_3d[z]:
                 label_name = self.label_names[label_id - 1]
                 
-                # Extract outer CC
-                outer_slice = self.outer_masks_L2[label_name][z].compute()
+                # Get FULL slice from cached block
+                outer_slice = outer_blocks[label_name][z_rel]
                 
-                from scipy import ndimage
+                # Label CCs on FULL slice (correct CC IDs)
                 labeled_outer, _ = ndimage.label(outer_slice > 0)
-                
-                # CC is 0-indexed in path, but 1-indexed in labeled array
                 cc_mask = (labeled_outer == (cc_id + 1))
                 
-                # Crop to bbox
+                # NOW crop to bbox
                 cc_cropped = cc_mask[
                     xy_bbox['y_min']:xy_bbox['y_max'],
                     xy_bbox['x_min']:xy_bbox['x_max']
                 ]
-                
-                # Add to mask
-                z_rel = z - z_min
                 label_masks[label_name]['outer'][z_rel] |= cc_cropped
                 
-                # Extract inner CC (within outer)
-                if label_name in self.inner_masks_L2:
-                    inner_slice = self.inner_masks_L2[label_name][z].compute()
+                # Inner
+                if label_name in inner_blocks:
+                    inner_slice = inner_blocks[label_name][z_rel]
                     inner_in_outer = (inner_slice > 0) & cc_mask
-                    
                     inner_cropped = inner_in_outer[
                         xy_bbox['y_min']:xy_bbox['y_max'],
                         xy_bbox['x_min']:xy_bbox['x_max']
                     ]
-                    
                     label_masks[label_name]['inner'][z_rel] |= inner_cropped
+        
+        print(f"    [TIMING] label + mask ops: {time.time() - t0:.3f}s")
         
         # Report
         for label_name, masks in label_masks.items():
@@ -293,6 +311,8 @@ class CCPathTracker:
             inner_voxels = np.sum(masks['inner'])
             if outer_voxels > 0:
                 print(f"    {label_name}: outer={outer_voxels:,}, inner={inner_voxels:,}")
+        
+        print(f"  [TIMING] _extract_path_ccs_in_bbox TOTAL: {time.time() - t_start:.3f}s")
         
         return label_masks
 
