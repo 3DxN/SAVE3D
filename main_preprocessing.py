@@ -107,22 +107,22 @@ def main():
     
     # Input @ Level 0
     # IMAGE_PATH = "IDC-P_8x_111325.tif"
-    IMAGE_PATH = "fc_2x_all_30_to_1200_cropped_092325.tif"
+    IMAGE_PATH = "IDC-P_8x_111325.tif"
     VOXEL_SIZE_L0 = (0.9667 * 2, 0.9667 * 2, 0.9667 * 2)  # μm
     PYRAMID_LEVELS = 4
     
     # Skeleton @ Level 2
     # SKELETON_L2 = 'output_skeleton_32x_092625.tiff'
-    SKELETON_L2 = 'Crypt_mask_cropped_mask_4x_010926-skeleton.tif'
+    SKELETON_L2 = 'output_skeleton_32x_092625.tiff'
     
     # Output
-    OUT_ZARR = 'prostate_pathology.zarr'
+    OUT_ZARR = 'prostate_pathology9_gpu.zarr'
     
     # ========= INPUT FORMAT SELECTION =========
     # Choose ONE of the following input formats:
     
     # --- Format A: Separate mask files (Legacy) ---
-    USE_SEPARATE_MASKS = False  # Set to True for Format A, False for Format B
+    USE_SEPARATE_MASKS = True  # Set to True for Format A, False for Format B
     
     if USE_SEPARATE_MASKS:
         # Outer masks @ Level 2 (required)
@@ -339,12 +339,6 @@ def main():
             json.dump(skeleton_graph, f, cls=NumpyEncoder)
         progress.update(f"✓ Skeleton graph saved to {skeleton_graph_path}")
         
-        # Save skeleton points
-        skeleton_points_path = Path(OUT_ZARR).parent / "skeleton_points.json"
-        with open(skeleton_points_path, 'w') as f:
-            json.dump(skeleton_points, f, cls=NumpyEncoder)
-        progress.update(f"✓ Skeleton points saved to {skeleton_points_path}")
-        
         # Step 4.3: Prebuild skeleton meshes
         progress.update("Step 4.3/7: Prebuilding skeleton meshes...")
         skeleton_mesh_info = prebuild_skeleton_meshes(
@@ -376,6 +370,12 @@ def main():
             Path(OUT_ZARR).parent
         )
         progress.update(f"✓ Skeleton instance meshes complete")
+
+        # Save skeleton points
+        skeleton_points_path = Path(OUT_ZARR).parent / "skeleton_points.json"
+        with open(skeleton_points_path, 'w') as f:
+            json.dump(skeleton_points, f, cls=NumpyEncoder)
+        progress.update(f"✓ Skeleton points saved to {skeleton_points_path}")
         
         # Step 4.5: Prebuild image host meshes (parallel processing)
         progress.update("Step 4.5/7: Prebuilding image host meshes...")
