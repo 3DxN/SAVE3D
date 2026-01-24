@@ -928,55 +928,7 @@ class SkeletonHost:
         
         # Update visualization
         self._highlight_update_timer.start(50)
-    '''
-    def _on_selection_brush_moved(self, center, widget):
-        """Callback when selection brush is dragged"""
-        app = self.app
-        
-        # First move after Draw clicked: allow jump to any position
-        if getattr(self, '_first_brush_move', False):
-            self._first_brush_move = False
-            widget.SetCenter(*nearest_pos)
-            self.selected_skeleton_indices.add(idx)
-            self.last_drawing_idx = idx
-            self._update_selection_highlight()
-            return
-    
-        # Snap to nearest skeleton point
-        dist, idx = app.data.skeleton_kdtree.query(center)
-        nearest_pos = app.data.skeleton_coords[idx]
-
-        # === Prevent jumping: check distance from last position ===
-        max_jump_distance = app.data.voxel_size_L2[0] * 20  # Max allowed jump (~20 voxels)
-        
-        if self.last_drawing_idx is not None and self.last_drawing_idx != idx:
-            last_pos = app.data.skeleton_coords[self.last_drawing_idx]
-            jump_distance = np.linalg.norm(nearest_pos - last_pos)
-            
-            if jump_distance > max_jump_distance:
-                # Jump too far, reject move, keep original position
-                old_pos = app.data.skeleton_coords[self.last_drawing_idx]
-                widget.SetCenter(*old_pos)
-                print(f"  [BRUSH] Jump rejected: {jump_distance:.1f} μm > {max_jump_distance:.1f} μm")
-                return
-            
-        widget.SetCenter(*nearest_pos)
-        
-        # Fill path from last_drawing_idx to idx
-        if self.last_drawing_idx is not None and self.last_drawing_idx != idx:
-            valid = self._fill_selection_path(self.last_drawing_idx, idx)
-
-            if not valid:
-                # Path invalid, don't add this point
-                return
-        
-        # Add current point
-        self.selected_skeleton_indices.add(idx)
-        self.last_drawing_idx = idx
-        
-        # Update visualization
-        self._update_selection_highlight()
-    '''
+   
     def _fill_selection_path(self, from_idx, to_idx):
         """Use neighbors BFS to find shortest path on skeleton and fill"""
         app = self.app
