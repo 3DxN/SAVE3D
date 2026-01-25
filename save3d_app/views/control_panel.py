@@ -5,7 +5,7 @@ UI Control panel creation
 from qtpy import QtWidgets, QtCore, QtGui
 from pyvistaqt import QtInteractor 
 import numpy as np
-from ..controls import _on_host_mode_changed, _on_plane_toggle, _on_contour_toggle, _on_opacity_changed, _on_camera_sync_toggle, _update_visibility, _reset_2d_view
+from ..controls import _on_host_mode_changed, _on_plane_toggle, _on_contour_toggle, _on_opacity_changed, _on_camera_sync_toggle, _update_visibility, _reset_2d_view, _on_lock_angle_toggle
 from ..controls import _center_on_component, _center_on_component, _reset_views, _clear_tracking
 # =============================================================================
 # CONTROL PANEL CREATION
@@ -71,6 +71,11 @@ def _create_control_panel(app):
     app.sync_camera_chk.setChecked(False)
     app.sync_camera_chk.stateChanged.connect(lambda: _on_camera_sync_toggle(app))
     app.content_grid.addWidget(app.sync_camera_chk, 0, 1)
+
+    app.lock_angle_chk = QtWidgets.QCheckBox('Lock Viewing Angle')
+    app.lock_angle_chk.setChecked(False)
+    app.lock_angle_chk.stateChanged.connect(lambda: _on_lock_angle_toggle(app))
+    app.content_grid.addWidget(app.lock_angle_chk, 1, 1)
     
     app.show_marker_chk = QtWidgets.QCheckBox('Skeleton Marker')
     app.show_marker_chk.setChecked(True)
@@ -89,7 +94,7 @@ def _create_control_panel(app):
     
     app.reset_btn = QtWidgets.QPushButton('Reset 3D Views')
     app.reset_btn.clicked.connect(lambda: _reset_views(app))
-    app.content_grid.addWidget(app.reset_btn, 1, 1)
+    app.content_grid.addWidget(app.reset_btn, 2, 1)
     
     # Empty cell for Skeleton View (col 2)
     
@@ -105,7 +110,7 @@ def _create_control_panel(app):
     
     app.clear_btn = QtWidgets.QPushButton('Clear Tracking')
     app.clear_btn.clicked.connect(lambda: _clear_tracking(app))
-    app.content_grid.addWidget(app.clear_btn, 2, 1)
+    app.content_grid.addWidget(app.clear_btn, 3, 1)
     
     # Empty cell for Skeleton View (col 2)
     
