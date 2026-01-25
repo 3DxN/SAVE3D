@@ -220,6 +220,18 @@ def _on_camera_sync_toggle(app):
             if hasattr(app, attr):
                 delattr(app, attr)
 
+def _on_lock_angle_toggle(app):
+    """Handle lock viewing angle checkbox toggle"""
+    locked = app.lock_angle_chk.isChecked()
+    
+    if locked:
+        print("[LOCK] Viewing angle LOCKED (rotation disabled)")
+        app.skeleton_view.plotter.enable_image_style()
+        app.morphology_view.plotter.enable_image_style()
+    else:
+        print("[LOCK] Viewing angle UNLOCKED (rotation enabled)")
+        app.skeleton_view.plotter.enable_trackball_style()
+        app.morphology_view.plotter.enable_trackball_style()
 
 def _update_visibility(app):
     """Toggle visibility of various elements"""
