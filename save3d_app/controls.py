@@ -171,7 +171,13 @@ def _on_opacity_changed(app, value):
     opacity = value / 100.0
     app.napari_view.lab_layer.opacity = opacity
 
-
+def _on_skeleton_opacity_changed(app, value):
+    """Update skeleton view opacity"""
+    opacity = value / 100.0
+    for actor in app.skeleton_view.skeleton_actors.values():
+        actor.GetProperty().SetOpacity(opacity)
+    app.skeleton_view.plotter.render()
+    
 def _on_camera_sync_toggle(app):
     """Handle camera sync checkbox toggle"""
     app.state.camera_sync_enabled = app.sync_camera_chk.isChecked()
