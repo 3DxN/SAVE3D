@@ -5,7 +5,7 @@ UI Control panel creation
 from qtpy import QtWidgets, QtCore, QtGui
 from pyvistaqt import QtInteractor 
 import numpy as np
-from ..controls import _on_host_mode_changed, _on_plane_toggle, _on_contour_toggle, _on_opacity_changed, _on_camera_sync_toggle, _update_visibility, _reset_2d_view, _on_lock_angle_toggle
+from ..controls import _on_host_mode_changed, _on_plane_toggle, _on_contour_toggle, _on_opacity_changed, _on_camera_sync_toggle, _update_visibility, _reset_2d_view, _on_lock_angle_toggle, _on_skeleton_opacity_changed
 from ..controls import _center_on_component, _center_on_component, _reset_views, _clear_tracking
 # =============================================================================
 # CONTROL PANEL CREATION
@@ -156,6 +156,22 @@ def _create_control_panel(app):
     slider_layout.addWidget(opacity_label)
     slider_layout.addWidget(app.opacity_slider)
     app.content_grid.addWidget(slider_widget, 3, 0)
+
+    # --- Skeleton Opacity Slider ---
+    skel_slider_widget = QtWidgets.QWidget()
+    skel_slider_layout = QtWidgets.QVBoxLayout(skel_slider_widget)
+    skel_slider_layout.setSpacing(1)
+    skel_slider_layout.setContentsMargins(0, 0, 0, 0)
+
+    skel_opacity_label = QtWidgets.QLabel('Skeleton Opacity')
+    app.skeleton_opacity_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+    app.skeleton_opacity_slider.setRange(0, 100)
+    app.skeleton_opacity_slider.setValue(100)
+    app.skeleton_opacity_slider.valueChanged.connect(lambda v: _on_skeleton_opacity_changed(app, v))
+
+    skel_slider_layout.addWidget(skel_opacity_label)
+    skel_slider_layout.addWidget(app.skeleton_opacity_slider)
+    app.content_grid.addWidget(skel_slider_widget, 2, 2)
     
     main_layout.addWidget(app.content_widget)
     

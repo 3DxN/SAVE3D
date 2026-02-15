@@ -222,6 +222,29 @@ class SkeletonViewController:
             pass
         self.sphere_widget.Off()
         
+        def _find_nearest_skeleton_to_click(plotter, skeleton_coords, click_x, click_y):
+            renderer = plotter.renderer
+            cam = renderer.GetActiveCamera()
+            cam_pos = np.array(cam.GetPosition())
+            
+            renderer.SetDisplayPoint(click_x, click_y, 0.5)
+            renderer.DisplayToWorld()
+            world_pt = np.array(renderer.GetWorldPoint()[:3])
+            
+            # ray direction
+            ray_dir = world_pt - cam_pos
+            ray_dir = ray_dir / np.linalg.norm(ray_dir)
+            
+            vecs = skeleton_coords - cam_pos
+            proj = np.dot(vecs, ray_dir)[:, None] * ray_dir
+            perp = vecs - proj
+            dists = np.linalg.norm(perp, axis=1)
+            
+            dots = np.dot(vecs, ray_dir)
+            dists[dots < 0] = np.inf
+            
+            return np.argmin(dists)
+
         # === Right-click Jump (only in Skeleton Host) ===
         def on_right_click_pick(point):
             """Handle right-click on skeleton to jump sphere"""
@@ -273,12 +296,13 @@ class SkeletonViewController:
             skeleton_host._on_sphere_position_changed(nearest_pos)
             self.plotter.render()
         
-        self.plotter.enable_point_picking(
-            callback=on_right_click_pick,
-            show_message=False,
-            show_point=False,
-        )
-        
+        def _on_right_click(obj, event):
+            click_x, click_y = self.plotter.iren.interactor.GetEventPosition()
+            idx = _find_nearest_skeleton_to_click(self.plotter, data.skeleton_coords, click_x, click_y)
+            point = data.skeleton_coords[idx]
+            on_right_click_pick(point)
+
+        self.plotter.iren.interactor.AddObserver('RightButtonPressEvent', _on_right_click)
         print(f"[OK] Skeleton view initialized with Host Mode awareness")
 
     def _add_skeleton_scale_bar(self, x_max, y_max, z_max):
