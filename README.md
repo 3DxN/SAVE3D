@@ -1,8 +1,6 @@
 # SAVE-3D: Structure-Aware Visualization & Exploration for 3D Densely Labeled Tissue Images
 
-A tri-view interactive visualization system for exploring dense 3D tissue images. SAVE-3D uses **2D contours/shapes** (instead of points) as the linking unit between 2D and 3D views, enabling structure-based navigation and bidirectional exploration.
-
-> Unlike point-based 2D-3D linking, SAVE-3D enables **structure–structure correspondence** by using 2D connected components as the navigation unit. The 3D view is separated into **topology (skeleton)** and **morphology (geometry)** to reduce occlusion and improve understanding of connectivity.
+A tri-view interactive visualization system for exploring 3D densely labeled tissue images. SAVE-3D employs **2D contours** as the linking unit between 2D and 3D views, enabling **structure-aware navigation** with reduced degrees of freedom. The 3D representation is decomposed into a **skeleton view (topological overview)** and a **morphology view (local structural detail)** to avoid occlusion while retaining access to detailed geometry. **Two complementary host modes** support bidirectional exploration between 2D cross-sectional images and 3D renderings.
 
 ## Project Structure
 
@@ -22,7 +20,7 @@ SAVE3D/
 │   ├── pyramid.py           # Multi-resolution pyramid (GPU-accelerated)
 │   ├── transforms.py        # Mask upsampling
 │   ├── skeleton.py          # Skeleton processing & graph building
-│   ├── cc_analysis.py       # 2D CC precomputation & adjacency
+│   ├── cc_analysis.py       # 2D contour precomputation & adjacency
 │   ├── mesh_builders.py     # Prebuild VTK meshes
 │   ├── zarr_writer.py       # OME-NGFF Zarr output
 │   └── utils.py             # Utilities
@@ -31,7 +29,7 @@ SAVE3D/
     ├── controls.py          # UI callbacks
     ├── state.py             # Application state
     ├── data/                # Data loading from Zarr
-    ├── core/                # Core algorithms (CC propagation, mesh building)
+    ├── core/                # Core algorithms (contour propagation, mesh building)
     ├── views/               # View controllers (Napari, Skeleton, Morphology)
     └── modes/               # Host modes (ImageHost, SkeletonHost)
 ```
@@ -46,34 +44,31 @@ SAVE3D/
 
 2. **Build Image Pyramid** — GPU-accelerated multi-resolution pyramid (L0 → L1 → L2 → L3)  
 
-3. **Load Masks @ L2** — Load outer/inner segmentation masks with auto color assignment  
+3. **Load Masks @ L2** — Load outer/inner segmentation masks with auto color (if not pre-assigned)  
 
-4. **Skeleton Intersection Analysis** — Compute skeleton overlap ratios with each label  
+4. **Skeleton Intersection Analysis** — Assign skeleton labels by computing the intersection with segmentation masks
 
 5. **Create Combined Labels** — Merge masks and upsample L2 → L0  
 
-6. **Extract Skeleton Points** — Build KD-Tree data with 26-connectivity neighbors  
+6. **Extract Skeleton Points** — Build KD-Tree data
 
-7. **Build Skeleton Graph** — Compute endpoints, bifurcations, and total length  
+7. **Build Skeleton Graph** — Compute endpoints, bifurcations, and total length (not used in current version)  
 
-8. **Prebuild Meshes** — Generate VTK meshes for all visualization modes  
-   - Morphology meshes (Navigation mode)  
-   - Instance meshes (Instance mode)  
-   - Image host meshes (per 3D-CC)  
+8. **Prebuild Meshes** — Generate VTK meshes for most visualization modes  
 
-9. **Precompute 2D CC & Adjacency** — Per z-slice CC properties and overlap relationships  
+9. **Precompute 2D contours & Adjacency** — Per z-slice contours properties and overlap relationships  
 
 10. **Write Zarr** — Output OME-NGFF format with image/label pyramids  
 
 **Output files:**
 - `output.zarr/` — Main data (image + labels + masks)
 - `metadata.json` — Resolution, colors, label names
-- `cc_metadata.json` — 2D CC precomputed data (critical for runtime)
+- `cc_metadata.json` — 2D contours precomputed data (critical for runtime)
 - `skeleton_points.json` — Skeleton points for KD-Tree
 - `skeleton_graph.json` — Skeleton graph structure
-- `morphology_meshes/` — Navigation mode meshes
-- `skeleton_instance_meshes/` — Instance mode meshes
-- `image_host_meshes/` — Image host mode meshes
+- `morphology_meshes/` — Per-label meshes for image-host label mode and skeleton-host navigation mode
+- `skeleton_instance_meshes/` — Meshes for skeleton-host instance mode
+- `image_host_meshes/` — Meshes for image-host instance mode
 
 ### Visualization Application
 
@@ -97,9 +92,9 @@ SAVE3D/
 
 | Image Host Modes | Skeleton Host Modes |
 |------------------|---------------------|
-| 0: Instance (single 3D CC) | 0: Instance (skeleton-connected) |
-| 1: Label (all objects of label) | 1: Navigation (sphere + local morph) |
-| 2: Z Navigation (follow overlap) | 2: Selection (draw to select region) |
+| 0: Instance (3D object of the same label) | 0: Instance (same label, skeleton-connected) |
+| 1: Label (all objects sharing the same label) | 1: Navigation (dynamic radius around widget) |
+| 2: Z Navigation (overlap-based propagation path) | 2: Selection (brushing along skeleton) |
 
 ## Usage
 
@@ -124,11 +119,7 @@ python main_app.py output.zarr
 
 ### Python Version Requirement
 
-> ⚠️ **Important: Use Python 3.10 or 3.11**
->
-> This ensures compatibility with GPU acceleration packages (RAPIDS: cucim, cuml, cugraph).
-> - Python 3.9 and below: Newer versions of napari are not supported
-> - Python 3.12+: RAPIDS is not fully supported yet
+> **Important: Use Python 3.10 or 3.11**
 
 ### One-Click Setup (Recommended)
 
@@ -200,16 +191,6 @@ pip install -r requirements.txt
 conda install -c rapidsai -c conda-forge -c nvidia \
     cupy cucim cuml cugraph cuda-version=12.0
 ```
-
-### Python Version Compatibility Matrix
-
-| Python | napari | pyvista | CuPy | RAPIDS | Recommendation |
-|--------|--------|---------|------|--------|----------------|
-| 3.9 | ✅ | ✅ | ✅ | ⚠️ Limited | ❌ Not recommended |
-| **3.10** | ✅ | ✅ | ✅ | ✅ | ✅ **Recommended** |
-| **3.11** | ✅ | ✅ | ✅ | ✅ | ✅ Supported |
-| 3.12 | ✅ | ✅ | ✅ | ❌ Not supported | ❌ Not recommended |
-
 ### Verify Installation
 
 ```bash
@@ -246,22 +227,7 @@ python -c "import cupy; print(f'✓ CuPy GPU: {cupy.cuda.runtime.getDeviceCount(
 | cupy-cuda12x | GPU-accelerated NumPy (CUDA 12.x) |
 | cucim | GPU image processing (via conda, Linux only) |
 | cuml | GPU machine learning (via conda, Linux only) |
-| cugraph | GPU graph processing (via conda, Linux only) |
-
-## GPU Acceleration Features
-
-SAVE-3D preprocessing supports GPU acceleration via CuPy for significant speedups:
-
-| Feature | GPU Acceleration | Speedup |
-|---------|------------------|---------|
-| Image pyramid building | ✅ Pipelined CUDA streams | 5-10x |
-| Mask upsampling | ✅ Chunked GPU processing | 3-5x |
-| Connected component labeling | ✅ cupyx.scipy.ndimage.label | 2-5x |
-| Skeleton point mapping | ✅ Batch L0 CC pre-computation | 10-20x |
-| np.unique on large volumes | ✅ CuPy unique | 2-5x |
-
-> **Note:** GPU acceleration works on both Windows and Linux. CuPy provides cross-platform support, while RAPIDS (cucim, cuml, cugraph) is Linux-only.
 
 ## Author
 
-Developed by **Huai-Ching Hsieh** and **Yang-Hsien Lin**, 2025–2026.
+Developed by **Huai-Ching Hsieh** and **Yang-Hsien Lin**, 2025–2026.  
