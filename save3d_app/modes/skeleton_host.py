@@ -1649,7 +1649,7 @@ class SkeletonHost:
             interaction_event='always',
             pass_widget=True,
         )
-        self.selection_sphere_widget.ScaleOff()
+        app.skeleton_view.sphere_widget.ScaleOff()
 
         try:
             prop = app.skeleton_view.sphere_widget.GetSphereProperty()
@@ -1710,7 +1710,7 @@ class SkeletonHost:
             interaction_event='always',
             pass_widget=True,
         )
-        self.selection_sphere_widget.ScaleOff()
+        app.skeleton_view.sphere_widget.ScaleOff()
 
         try:
             prop = app.skeleton_view.sphere_widget.GetSphereProperty()
