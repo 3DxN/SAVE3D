@@ -5,7 +5,7 @@ UI Control panel creation
 from qtpy import QtWidgets, QtCore, QtGui
 from pyvistaqt import QtInteractor 
 import numpy as np
-from ..controls import _on_host_mode_changed, _on_plane_toggle, _on_contour_toggle, _on_opacity_changed, _on_camera_sync_toggle, _update_visibility, _reset_2d_view, _on_lock_angle_toggle, _on_skeleton_opacity_changed
+from ..controls import _on_host_mode_changed, _on_plane_toggle, _on_contour_toggle, _on_opacity_changed, _on_camera_sync_toggle, _update_visibility, _reset_2d_view
 from ..controls import _center_on_component, _center_on_component, _reset_views, _clear_tracking
 # =============================================================================
 # CONTROL PANEL CREATION
@@ -71,11 +71,6 @@ def _create_control_panel(app):
     app.sync_camera_chk.setChecked(False)
     app.sync_camera_chk.stateChanged.connect(lambda: _on_camera_sync_toggle(app))
     app.content_grid.addWidget(app.sync_camera_chk, 0, 1)
-
-    app.lock_angle_chk = QtWidgets.QCheckBox('Lock Viewing Angle')
-    app.lock_angle_chk.setChecked(False)
-    app.lock_angle_chk.stateChanged.connect(lambda: _on_lock_angle_toggle(app))
-    app.content_grid.addWidget(app.lock_angle_chk, 1, 1)
     
     app.show_marker_chk = QtWidgets.QCheckBox('Skeleton Marker')
     app.show_marker_chk.setChecked(True)
@@ -94,7 +89,7 @@ def _create_control_panel(app):
     
     app.reset_btn = QtWidgets.QPushButton('Reset 3D Views')
     app.reset_btn.clicked.connect(lambda: _reset_views(app))
-    app.content_grid.addWidget(app.reset_btn, 2, 1)
+    app.content_grid.addWidget(app.reset_btn, 1, 1)
     
     # Empty cell for Skeleton View (col 2)
     
@@ -110,7 +105,7 @@ def _create_control_panel(app):
     
     app.clear_btn = QtWidgets.QPushButton('Clear Tracking')
     app.clear_btn.clicked.connect(lambda: _clear_tracking(app))
-    app.content_grid.addWidget(app.clear_btn, 3, 1)
+    app.content_grid.addWidget(app.clear_btn, 2, 1)
     
     # Empty cell for Skeleton View (col 2)
     
@@ -156,22 +151,6 @@ def _create_control_panel(app):
     slider_layout.addWidget(opacity_label)
     slider_layout.addWidget(app.opacity_slider)
     app.content_grid.addWidget(slider_widget, 3, 0)
-
-    # --- Skeleton Opacity Slider ---
-    skel_slider_widget = QtWidgets.QWidget()
-    skel_slider_layout = QtWidgets.QVBoxLayout(skel_slider_widget)
-    skel_slider_layout.setSpacing(1)
-    skel_slider_layout.setContentsMargins(0, 0, 0, 0)
-
-    skel_opacity_label = QtWidgets.QLabel('Skeleton Opacity')
-    app.skeleton_opacity_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
-    app.skeleton_opacity_slider.setRange(0, 100)
-    app.skeleton_opacity_slider.setValue(100)
-    app.skeleton_opacity_slider.valueChanged.connect(lambda v: _on_skeleton_opacity_changed(app, v))
-
-    skel_slider_layout.addWidget(skel_opacity_label)
-    skel_slider_layout.addWidget(app.skeleton_opacity_slider)
-    app.content_grid.addWidget(skel_slider_widget, 2, 2)
     
     main_layout.addWidget(app.content_widget)
     
