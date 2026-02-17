@@ -79,7 +79,7 @@ class MorphologyViewController:
         
         self.plotter = QtInteractor(self.app)
         self.plotter.enable_trackball_style()
-        self.plotter.set_background([0.95, 0.95, 0.95])
+        self.plotter.set_background([0.97, 0.97, 0.97])
         
         try:
             self.plotter.enable_anti_aliasing()

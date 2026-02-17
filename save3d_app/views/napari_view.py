@@ -38,20 +38,14 @@ class NapariViewController:
         layout.setContentsMargins(4, 4, 4, 4)
         
         self.viewer = napari.Viewer(show=False)
-        napari_window = self.viewer.window._qt_window
+        self.viewer.theme = 'light'
 
         try:
-            self.viewer.window._qt_window.dockLayerControls.setVisible(False)
-            self.viewer.window._qt_window.dockLayerList.setVisible(False)
-        except AttributeError:
-            try:
-                for dock in self.viewer.window._qt_window.findChildren(QtWidgets.QDockWidget):
-                    dock_name = dock.objectName().lower()
-                    if 'layer' in dock_name or 'control' in dock_name:
-                        dock.setVisible(False)
-                        print(f"  Hidden dock: {dock.objectName()}")
-            except Exception as e:
-                print(f"  ⚠ Could not hide layer controls: {e}")
+            self.viewer.window._qt_viewer.canvas.bgcolor = (0.97, 0.97, 0.97, 1.0)
+        except:
+            pass
+        
+        napari_window = self.viewer.window._qt_window
         
         self.viewer.axes.visible = True
         self.viewer.scale_bar.visible = True
@@ -145,5 +139,19 @@ class NapariViewController:
         
         layout.addWidget(napari_window, stretch=1)
         layout.addWidget(controls, stretch=0)
+        
+        # Hide ALL napari UI LAST (after theme, layers, and layout are done)
+        for dock in self.viewer.window._qt_window.findChildren(QtWidgets.QDockWidget):
+            dock.setVisible(False)
+        
+        try:
+            self.viewer.window._qt_window.menuBar().setVisible(False)
+        except:
+            pass
+        
+        try:
+            self.viewer.window._qt_window.statusBar().setVisible(False)
+        except:
+            pass
         
         return container
