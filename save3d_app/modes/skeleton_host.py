@@ -788,6 +788,56 @@ class SkeletonHost:
     # =========================================================================
     # MODE 2: SELECTION
     # =========================================================================
+    def _is_point_filtered(self, idx):
+        """Check if a skeleton point's spatial CC is filtered out"""
+        state = self.app.state
+        data = self.app.data
+        if state.filtered_spatial_cc_ids and len(data.skeleton_spatial_cc_ids) > idx:
+            return data.skeleton_spatial_cc_ids[idx] in state.filtered_spatial_cc_ids
+        return False
+    
+    def _find_nearest_skeleton_screen_space(self, world_pos):
+        """Find nearest skeleton point in screen space (what user sees)"""
+        app = self.app
+        renderer = app.skeleton_view.plotter.renderer
+        cam = renderer.GetActiveCamera()
+        cam_pos = np.array(cam.GetPosition())
+        
+        ray_dir = world_pos - cam_pos
+        ray_dir = ray_dir / np.linalg.norm(ray_dir)
+        
+        coords = app.data.skeleton_coords
+        vecs = coords - cam_pos
+        proj = np.dot(vecs, ray_dir)[:, None] * ray_dir
+        perp = vecs - proj
+        dists = np.linalg.norm(perp, axis=1)
+        
+        dots = np.dot(vecs, ray_dir)
+        dists[dots < 0] = np.inf
+        
+        if app.state.filtered_spatial_cc_ids and len(app.data.skeleton_spatial_cc_ids) > 0:
+            filtered_mask = np.isin(app.data.skeleton_spatial_cc_ids, list(app.state.filtered_spatial_cc_ids))
+            dists[filtered_mask] = np.inf
+        
+        return np.argmin(dists)
+
+    def _get_graph_neighborhood(self, start_idx, max_hops=15):
+        """BFS on skeleton graph, return indices within max_hops"""
+        neighbors = self.app.data.skeleton_neighbors
+        visited = set()
+        queue = [(start_idx, 0)]
+        visited.add(start_idx)
+        
+        while queue:
+            node, depth = queue.pop(0)
+            if depth >= max_hops:
+                continue
+            for nb in neighbors[node]:
+                if nb not in visited:
+                    visited.add(nb)
+                    queue.append((nb, depth + 1))
+        
+        return list(visited)
     
     def _on_draw_selection_toggle(self):
         """Toggle selection drawing mode"""
@@ -876,7 +926,21 @@ class SkeletonHost:
         app = self.app
         
         # Snap to nearest skeleton point
-        dist, idx = app.data.skeleton_kdtree.query(center)
+        ray_idx = self._find_nearest_skeleton_screen_space(center)
+        if self._is_point_filtered(ray_idx):
+            return
+        
+        if self.last_drawing_idx is not None:
+            local_indices = self._get_graph_neighborhood(self.last_drawing_idx, max_hops=15)
+            if ray_idx in local_indices:
+                idx = ray_idx
+            else:
+                local_coords = app.data.skeleton_coords[local_indices]
+                ray_pos = app.data.skeleton_coords[ray_idx]
+                local_dists = np.linalg.norm(local_coords - ray_pos, axis=1)
+                idx = local_indices[np.argmin(local_dists)]
+        else:
+            idx = ray_idx
         nearest_pos = app.data.skeleton_coords[idx]
 
         # Positioning phase: allow jump to any position until connected move
@@ -1634,6 +1698,8 @@ class SkeletonHost:
             if getattr(skeleton_host, '_mode_changing', False):
                 return
             dist, idx = app.data.skeleton_kdtree.query(center)
+            if skeleton_host._is_point_filtered(idx):
+                return
             nearest_pos = app.data.skeleton_coords[idx]
             widget.SetCenter(*nearest_pos)
             app.state.sphere_position = nearest_pos.copy()

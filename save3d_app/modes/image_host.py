@@ -958,7 +958,7 @@ class ImageHost:
             
             sphere = pv.Sphere(radius=radius, center=marker_pos)
             
-            color = 'black' if has_skeleton else 'darkgray'
+            color = 'black' if has_skeleton else 'black'
             opacity = 0.5  # Semi-transparent for visibility
             
             app.skeleton_view.black_marker_actor = app.skeleton_view.plotter.add_mesh(
@@ -1039,7 +1039,7 @@ class ImageHost:
                         dist, idx = app.data.skeleton_kdtree.query(marker_pos)
                         threshold = skeleton_radius_um * 2.0
                         has_skeleton = (dist <= threshold)
-                        color = 'black' if has_skeleton else 'darkgray'
+                        color = 'black' if has_skeleton else 'black'
                         
                         sphere = pv.Sphere(radius=radius, center=marker_pos)
                         app.skeleton_view.black_marker_actor.mapper.SetInputData(sphere)
