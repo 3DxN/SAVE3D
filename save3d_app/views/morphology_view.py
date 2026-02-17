@@ -50,7 +50,18 @@ class MorphologyViewController:
         # Global morphology meshes (for Skeleton Host Navigation mode)
         self.global_morph_meshes = {}
         self.morph_meshes_loaded = False
-    
+        
+    def set_light_angle(self, angle_deg):
+        """Rotate main light around Y axis"""
+        if self.main_light is None:
+            return
+        r = 10
+        rad = np.radians(angle_deg)
+        x = r * np.cos(rad)
+        z = r * np.sin(rad)
+        self.main_light.SetPosition(x, 10, z)
+        self.plotter.render()
+
     def _setup_morphology_panel(self):
         """Setup Morphology view"""
         container = QtWidgets.QWidget()
@@ -84,9 +95,9 @@ class MorphologyViewController:
             print(f"  ⚠ Morphology: Shadows not available: {e}")
         
         # Add three-light setup
+        # Add three-light setup
         try:
             z_flip = 1
-
             # Light 1: main light from upper right front
             light1 = pv.Light(
                 position=(10, 10, 10 * z_flip),
@@ -110,11 +121,13 @@ class MorphologyViewController:
                 intensity=0.4
             )
             
-            self.plotter.add_light(light1)
+            self.main_light = light1
+            self.plotter.add_light(self.main_light)
             self.plotter.add_light(light2)
             self.plotter.add_light(light3)
             print("  ✓ Morphology: Three-light setup added")
         except Exception as e:
+            self.main_light = None
             print(f"  ⚠ Morphology: Custom lighting not available: {e}")
         
         try:
@@ -157,7 +170,7 @@ class MorphologyViewController:
         # Opacity depends on whether inner mask exists
         if self.app.data.has_inner_mask:
             self.outer_opacity = 0.2  # Transparent outer when inner exists
-            self.inner_opacity = 0.8  # Solid inner
+            self.inner_opacity = 1.0  # Solid inner
         else:
             self.outer_opacity = 0.8  # Solid outer when no inner
             self.inner_opacity = 0.0  # No inner

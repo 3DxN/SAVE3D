@@ -5,7 +5,7 @@ UI Control panel creation
 from qtpy import QtWidgets, QtCore, QtGui
 from pyvistaqt import QtInteractor 
 import numpy as np
-from ..controls import _on_host_mode_changed, _on_plane_toggle, _on_contour_toggle, _on_opacity_changed, _on_camera_sync_toggle, _update_visibility, _reset_2d_view
+from ..controls import _on_host_mode_changed, _on_plane_toggle, _on_contour_toggle, _on_opacity_changed, _on_camera_sync_toggle, _update_visibility, _reset_2d_view, _on_lock_angle_toggle, _on_skeleton_opacity_changed, _on_skeleton_filter_changed, _on_inner_opacity_changed, _on_morph_light_angle_changed
 from ..controls import _center_on_component, _center_on_component, _reset_views, _clear_tracking
 # =============================================================================
 # CONTROL PANEL CREATION
@@ -62,7 +62,7 @@ def _create_control_panel(app):
         app.content_grid.setColumnStretch(col, 1)
     
     # --- Row 0: Checkboxes ---
-    app.show_boundary_chk = QtWidgets.QCheckBox('2D CC Boundary')
+    app.show_boundary_chk = QtWidgets.QCheckBox('2D Contour Boundary')
     app.show_boundary_chk.setChecked(True)
     app.show_boundary_chk.stateChanged.connect(lambda: _update_visibility(app))
     app.content_grid.addWidget(app.show_boundary_chk, 0, 0)
@@ -71,6 +71,11 @@ def _create_control_panel(app):
     app.sync_camera_chk.setChecked(False)
     app.sync_camera_chk.stateChanged.connect(lambda: _on_camera_sync_toggle(app))
     app.content_grid.addWidget(app.sync_camera_chk, 0, 1)
+
+    app.lock_angle_chk = QtWidgets.QCheckBox('Lock Viewing Angle')
+    app.lock_angle_chk.setChecked(False)
+    app.lock_angle_chk.stateChanged.connect(lambda: _on_lock_angle_toggle(app))
+    app.content_grid.addWidget(app.lock_angle_chk, 1, 1)
     
     app.show_marker_chk = QtWidgets.QCheckBox('Skeleton Marker')
     app.show_marker_chk.setChecked(True)
@@ -89,23 +94,58 @@ def _create_control_panel(app):
     
     app.reset_btn = QtWidgets.QPushButton('Reset 3D Views')
     app.reset_btn.clicked.connect(lambda: _reset_views(app))
-    app.content_grid.addWidget(app.reset_btn, 1, 1)
+    app.content_grid.addWidget(app.reset_btn, 2, 1)
     
     # Empty cell for Skeleton View (col 2)
     
-    app.show_plane_contour_chk = QtWidgets.QCheckBox('Guide Plane CC Contour')
+    app.show_plane_contour_chk = QtWidgets.QCheckBox('Contour Outline')
     app.show_plane_contour_chk.setChecked(True)
     app.show_plane_contour_chk.stateChanged.connect(lambda: _on_contour_toggle(app))
     app.content_grid.addWidget(app.show_plane_contour_chk, 1, 3)
     
+    # --- Inner Lumen Opacity Slider ---
+    inner_slider_widget = QtWidgets.QWidget()
+    inner_slider_layout = QtWidgets.QVBoxLayout(inner_slider_widget)
+    inner_slider_layout.setSpacing(1)
+    inner_slider_layout.setContentsMargins(0, 0, 0, 0)
+
+    app.inner_opacity_label = QtWidgets.QLabel('Inner Lumen Opacity: 100%')
+    app.inner_opacity_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+    app.inner_opacity_slider.setRange(0, 100)
+    app.inner_opacity_slider.setValue(100)
+    app.inner_opacity_slider.valueChanged.connect(lambda v: _on_inner_opacity_changed(app, v))
+
+    inner_slider_layout.addWidget(app.inner_opacity_label)
+    inner_slider_layout.addWidget(app.inner_opacity_slider)
+    app.content_grid.addWidget(inner_slider_widget, 2, 3)
+
+    if not app.data.has_inner_mask:
+        inner_slider_widget.setVisible(False)
+
+    # --- Morphology Light Angle Slider ---
+    morph_light_widget = QtWidgets.QWidget()
+    morph_light_layout = QtWidgets.QVBoxLayout(morph_light_widget)
+    morph_light_layout.setSpacing(1)
+    morph_light_layout.setContentsMargins(0, 0, 0, 0)
+
+    app.morph_light_label = QtWidgets.QLabel('Light Angle: 45°')
+    app.morph_light_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+    app.morph_light_slider.setRange(0, 360)
+    app.morph_light_slider.setValue(45)
+    app.morph_light_slider.valueChanged.connect(lambda v: _on_morph_light_angle_changed(app, v))
+
+    morph_light_layout.addWidget(app.morph_light_label)
+    morph_light_layout.addWidget(app.morph_light_slider)
+    app.content_grid.addWidget(morph_light_widget, 3, 3)
+
     # --- Row 2: Buttons / Checkboxes ---
-    app.center_btn = QtWidgets.QPushButton('Center on 2D CC')
+    app.center_btn = QtWidgets.QPushButton('Center on Contour')
     app.center_btn.clicked.connect(lambda: _center_on_component(app, from_button=True))
     app.content_grid.addWidget(app.center_btn, 2, 0)
     
     app.clear_btn = QtWidgets.QPushButton('Clear Tracking')
     app.clear_btn.clicked.connect(lambda: _clear_tracking(app))
-    app.content_grid.addWidget(app.clear_btn, 2, 1)
+    app.content_grid.addWidget(app.clear_btn, 3, 1)
     
     # Empty cell for Skeleton View (col 2)
     
@@ -134,7 +174,7 @@ def _create_control_panel(app):
     image_morph_layout.addWidget(app.image_label_radio)
     image_morph_layout.addWidget(app.image_znavigation_radio)
 
-    app.content_grid.addWidget(app.image_morph_mode_widget, 3, 3)
+    app.content_grid.addWidget(app.image_morph_mode_widget, 4, 3)
     
     # --- Row 3: Slider ---
     slider_widget = QtWidgets.QWidget()
@@ -151,6 +191,54 @@ def _create_control_panel(app):
     slider_layout.addWidget(opacity_label)
     slider_layout.addWidget(app.opacity_slider)
     app.content_grid.addWidget(slider_widget, 3, 0)
+
+    # --- Skeleton Opacity Slider ---
+    skel_slider_widget = QtWidgets.QWidget()
+    skel_slider_layout = QtWidgets.QVBoxLayout(skel_slider_widget)
+    skel_slider_layout.setSpacing(1)
+    skel_slider_layout.setContentsMargins(0, 0, 0, 0)
+
+    skel_opacity_label = QtWidgets.QLabel('Skeleton Opacity')
+    app.skeleton_opacity_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+    app.skeleton_opacity_slider.setRange(0, 100)
+    app.skeleton_opacity_slider.setValue(100)
+    app.skeleton_opacity_slider.valueChanged.connect(lambda v: _on_skeleton_opacity_changed(app, v))
+
+    skel_slider_layout.addWidget(skel_opacity_label)
+    skel_slider_layout.addWidget(app.skeleton_opacity_slider)
+    app.content_grid.addWidget(skel_slider_widget, 2, 2)
+
+    # --- Skeleton Size Filter Slider (per_spatial_cc mode only) ---
+    skel_filter_widget = QtWidgets.QWidget()
+    skel_filter_layout = QtWidgets.QVBoxLayout(skel_filter_widget)
+    skel_filter_layout.setSpacing(1)
+    skel_filter_layout.setContentsMargins(0, 0, 0, 0)
+
+    app.skel_filter_label = QtWidgets.QLabel('Skeleton Filter: 0')
+    app.skeleton_filter_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+    app.skeleton_filter_slider.setRange(0, 0)  # Will be set after data loads
+    app.skeleton_filter_slider.setValue(0)
+    app.skeleton_filter_slider.valueChanged.connect(
+        lambda v: _on_skeleton_filter_changed(app, v)
+    )
+
+    skel_filter_layout.addWidget(app.skel_filter_label)
+    skel_filter_layout.addWidget(app.skeleton_filter_slider)
+    app.content_grid.addWidget(skel_filter_widget, 1, 2)
+
+    # Set slider range based on data
+    if app.data.skeleton_mesh_mode == 'per_spatial_cc' and app.data._skeleton_mesh_info:
+        # Get unique spatial CC sizes, sorted
+        cc_sizes = sorted(set(
+            info.get('voxel_count', 0) 
+            for info in app.data._skeleton_mesh_info.values()
+        ))
+        app._skeleton_filter_thresholds = cc_sizes  # store for callback
+        app.skeleton_filter_slider.setRange(0, len(cc_sizes) - 1)
+    else:
+        app._skeleton_filter_thresholds = []
+        skel_filter_widget.setVisible(False)
+
     
     main_layout.addWidget(app.content_widget)
     
@@ -204,7 +292,7 @@ def _create_control_panel(app):
 
     app.morph_mode_widget.setVisible(False)
 
-    app.content_grid.addWidget(app.morph_mode_widget, 3, 3)
+    app.content_grid.addWidget(app.morph_mode_widget, 4, 3)
 
     # === Toggle Logic ===
     app.col_visible = [True, True, True, True]  # Track visibility
@@ -292,7 +380,7 @@ def _create_control_panel(app):
         main_layout.addWidget(colors_widget)
     
     # === Row: Slice Info ===
-    app.slice_info = QtWidgets.QLabel("Slice: 0 / 0  |  Z = 0.0 μm  |  No CC tracked")
+    app.slice_info = QtWidgets.QLabel("Slice: 0 / 0  |  Z = 0.0 μm  |  No Contour tracked")
     app.slice_info.setStyleSheet("""
         QLabel {
             font-weight: bold;

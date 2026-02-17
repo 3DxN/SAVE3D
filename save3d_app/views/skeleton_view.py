@@ -149,7 +149,7 @@ class SkeletonViewController:
             print("  ✓ Enhanced lighting added (3 lights)")
         except Exception as e:
             print(f"  ⚠ Custom lighting not available: {e}")
-
+        '''
         for label_name in data.label_names:
             if label_name not in data.skeleton_meshes:
                 continue
@@ -170,7 +170,49 @@ class SkeletonViewController:
             
             self.skeleton_actors[label_name] = actor
             print(f"  ✓ {label_name}: {mesh.n_points:,} pts")
-        
+        '''
+        # Add skeleton meshes based on mode
+        if data.skeleton_mesh_mode == 'per_spatial_cc':
+            for cc_key, mesh in data.skeleton_meshes.items():
+                info = data._skeleton_mesh_info.get(cc_key, {})
+                color = _hex_to_rgb(info.get('color', '#808080'))
+                
+                actor = self.plotter.add_mesh(
+                    mesh,
+                    color=color,
+                    opacity=1.0,
+                    smooth_shading=True,
+                    show_edges=False,
+                    metallic=0.0,
+                    specular=0.1,
+                    name=f'skeleton_cc_{cc_key}'
+                )
+                
+                self.skeleton_actors[cc_key] = actor
+                voxels = info.get('voxel_count', 0)
+                print(f"  ✓ cc {cc_key}: {mesh.n_points:,} pts, voxels={voxels}")
+        else:
+            for label_name in data.label_names:
+                if label_name not in data.skeleton_meshes:
+                    continue
+                
+                mesh = data.skeleton_meshes[label_name]
+                color = _hex_to_rgb(data.label_colors[label_name])
+                
+                actor = self.plotter.add_mesh(
+                    mesh,
+                    color=color,
+                    opacity=1.0,
+                    smooth_shading=True,
+                    show_edges=False,
+                    metallic=0.0,
+                    specular=0.1,
+                    name=f'skeleton_{label_name}'
+                )
+                
+                self.skeleton_actors[label_name] = actor
+                print(f"  ✓ {label_name}: {mesh.n_points:,} pts")
+
         # Add bounding box
         self._add_full_image_bounding_box()
         
@@ -187,6 +229,13 @@ class SkeletonViewController:
         # Create callback with closure over app
         def on_sphere_drag(center, widget):
             dist, idx = data.skeleton_kdtree.query(center)
+            # Skip if this point's spatial CC is filtered out
+            if hasattr(app.state, 'filtered_spatial_cc_ids') and app.state.filtered_spatial_cc_ids:
+                if len(data.skeleton_spatial_cc_ids) > idx:
+                    cc_id = data.skeleton_spatial_cc_ids[idx]
+                    if cc_id in app.state.filtered_spatial_cc_ids:
+                        return
+                    
             nearest_pos = data.skeleton_coords[idx]
             widget.SetCenter(*nearest_pos)
             app.state.sphere_position = nearest_pos.copy()
@@ -243,6 +292,13 @@ class SkeletonViewController:
             dots = np.dot(vecs, ray_dir)
             dists[dots < 0] = np.inf
             
+            # Exclude filtered spatial CCs
+            # Exclude filtered spatial CCs
+            if hasattr(app.state, 'filtered_spatial_cc_ids') and app.state.filtered_spatial_cc_ids:
+                if len(data.skeleton_spatial_cc_ids) > 0:
+                    filtered_mask = np.isin(data.skeleton_spatial_cc_ids, list(app.state.filtered_spatial_cc_ids))
+                    dists[filtered_mask] = np.inf
+            
             return np.argmin(dists)
 
         # === Right-click Jump (only in Skeleton Host) ===
@@ -260,6 +316,13 @@ class SkeletonViewController:
                     return  # Single segment mode, no jumping
                 
                 dist, idx = data.skeleton_kdtree.query(point)
+                # Skip if this point's spatial CC is filtered out
+                if hasattr(app.state, 'filtered_spatial_cc_ids') and app.state.filtered_spatial_cc_ids:
+                    if len(data.skeleton_spatial_cc_ids) > idx:
+                        cc_id = data.skeleton_spatial_cc_ids[idx]
+                        if cc_id in app.state.filtered_spatial_cc_ids:
+                            return
+                        
                 nearest_pos = data.skeleton_coords[idx]
                 
                 if skeleton_host.selection_sphere_widget:
@@ -282,6 +345,12 @@ class SkeletonViewController:
             else:
                 # No selection restriction, entire skeleton
                 dist, idx = data.skeleton_kdtree.query(point)
+                # Skip if filtered
+                if hasattr(app.state, 'filtered_spatial_cc_ids') and app.state.filtered_spatial_cc_ids:
+                    if len(data.skeleton_spatial_cc_ids) > idx:
+                        cc_id = data.skeleton_spatial_cc_ids[idx]
+                        if cc_id in app.state.filtered_spatial_cc_ids:
+                            return
                 nearest_pos = data.skeleton_coords[idx]
             
             if self.sphere_widget:
@@ -309,21 +378,42 @@ class SkeletonViewController:
         """
         Add scale bar to skeleton view OUTSIDE the bounding box
         
-        Places a 1mm scale bar outside the lower edge, right-aligned
+        Dynamically selects scale bar length based on dataset size:
+        - Dataset < 2mm in X/Y → 300 μm
+        - Dataset < 5mm → 500 μm  
+        - Dataset < 10mm → 1 mm
+        - Otherwise → 2 mm
+        
+        All positioning (offsets, caps, text) scale proportionally.
         """
         try:
-            # Scale bar length: 1mm = 1000 μm
-            scale_length_um = 1000.0
+            # Dynamic scale bar length based on dataset extent
+            extent = max(x_max, y_max)
             
-            # Position OUTSIDE box: below the box, right-aligned
-            offset_from_box = 300  # μm outside the box (below)
-            offset_from_right = 200  # μm from right edge
-            z_position = z_max / 2  # Middle height of the box
+            if extent < 2000:       # < 2mm
+                scale_length_um = 300.0
+                scale_label = '300 μm'
+            elif extent < 5000:     # < 5mm
+                scale_length_um = 500.0
+                scale_label = '500 μm'
+            elif extent < 10000:    # < 10mm
+                scale_length_um = 1000.0
+                scale_label = '1 mm'
+            else:
+                scale_length_um = 2000.0
+                scale_label = '2 mm'
+            
+            # Scale all positioning relative to dataset extent
+            offset_from_box = extent * 0.05      # 5% below box
+            offset_from_right = extent * 0.03    # 3% from right edge
+            text_offset = extent * 0.06          # text below bar
+            cap_radius = scale_length_um * 0.015  # proportional caps
+            z_position = z_max / 2
             
             # Right-align the scale bar
-            bar_end_x = x_max - offset_from_right  # Right end near box edge
-            bar_start_x = bar_end_x - scale_length_um  # Left end
-            bar_y = y_max + offset_from_box  # Below the box
+            bar_end_x = x_max - offset_from_right
+            bar_start_x = bar_end_x - scale_length_um
+            bar_y = y_max + offset_from_box
             bar_z = z_position
             
             # Create scale bar line
@@ -342,23 +432,21 @@ class SkeletonViewController:
                 name='skeleton_scale_bar'
             )
             
-            # Add end caps (small spheres at both ends)
-            cap_radius = 15.0  # μm
-            
+            # End caps
             start_cap = pv.Sphere(radius=cap_radius, center=scale_bar_points[0])
             end_cap = pv.Sphere(radius=cap_radius, center=scale_bar_points[1])
             
             self.plotter.add_mesh(start_cap, color='black', name='scale_bar_cap_start')
             self.plotter.add_mesh(end_cap, color='black', name='scale_bar_cap_end')
             
-            # Add text label BELOW the line, centered on the bar
+            # Text label below the bar, centered
             label_x = (bar_start_x + bar_end_x) / 2
-            label_y = bar_y + 400  # BELOW the bar
+            label_y = bar_y + text_offset
             label_z = bar_z
             
             self.skeleton_scale_text_actor = self.plotter.add_point_labels(
                 points=[[label_x, label_y, label_z]],
-                labels=['1 mm'],
+                labels=[scale_label],
                 font_size=10,
                 text_color='black',
                 point_size=0.1,
@@ -367,7 +455,7 @@ class SkeletonViewController:
                 name='skeleton_scale_text'
             )
             
-            print(f"  ✓ Scale bar added: 1 mm @ ({bar_end_x:.0f}, {bar_y:.0f}, {bar_z:.0f}) [right-aligned below box]")
+            print(f"  ✓ Scale bar added: {scale_label} @ ({bar_end_x:.0f}, {bar_y:.0f}, {bar_z:.0f}) [right-aligned below box]")
             
         except Exception as e:
             print(f"  ✗ Scale bar creation failed: {e}")
@@ -402,3 +490,31 @@ class SkeletonViewController:
                 pass
             
             self._add_skeleton_scale_bar(x_max, y_max, z_max)
+    
+    def filter_skeleton_by_size(self, min_voxel_count):
+        """
+        Filter skeleton meshes by spatial CC voxel count.
+        Hides CCs smaller than min_voxel_count.
+        
+        Also updates filtered_spatial_cc_ids on app.state for picking exclusion.
+        """
+        data = self.app.data
+        
+        if data.skeleton_mesh_mode != 'per_spatial_cc':
+            return
+        
+        filtered_out = set()
+        
+        for cc_key, actor in self.skeleton_actors.items():
+            info = data._skeleton_mesh_info.get(cc_key, {})
+            voxel_count = info.get('voxel_count', 0)
+            spatial_cc_id = info.get('spatial_cc_id', -1)
+            visible = voxel_count >= min_voxel_count
+            actor.SetVisibility(visible)
+            if not visible:
+                filtered_out.add(spatial_cc_id)
+        
+        # Store on state so picking can skip filtered CCs
+        self.app.state.filtered_spatial_cc_ids = filtered_out
+        
+        self.plotter.render()
