@@ -177,6 +177,30 @@ def _on_skeleton_opacity_changed(app, value):
     for actor in app.skeleton_view.skeleton_actors.values():
         actor.GetProperty().SetOpacity(opacity)
     app.skeleton_view.plotter.render()
+
+def _on_inner_opacity_changed(app, value):
+    """Update inner lumen opacity in morphology view"""
+    opacity = value / 100.0
+    app.inner_opacity_label.setText(f'Inner Lumen Opacity: {value}%')
+    app.morphology_view.inner_opacity = opacity
+    for actor in app.morphology_view.inner_mesh_actors.values():
+        actor.GetProperty().SetOpacity(opacity)
+    app.morphology_view.plotter.render()
+
+def _on_morph_light_angle_changed(app, value):
+    """Update morphology view light angle"""
+    app.morph_light_label.setText(f'Light Angle: {value}°')
+    app.morphology_view.set_light_angle(value)
+    
+def _on_skeleton_filter_changed(app, value):
+    """Update skeleton size filter"""
+    thresholds = getattr(app, '_skeleton_filter_thresholds', [])
+    if not thresholds:
+        return
+    # value is index into sorted thresholds, filter out everything below this size
+    min_voxels = thresholds[min(value, len(thresholds) - 1)]
+    app.skel_filter_label.setText(f'Skeleton Filter: {min_voxels} voxels')
+    app.skeleton_view.filter_skeleton_by_size(min_voxels)
     
 def _on_camera_sync_toggle(app):
     """Handle camera sync checkbox toggle"""

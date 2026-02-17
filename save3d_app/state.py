@@ -44,3 +44,6 @@ class AppState:
 
         # === Camera Sync ===
         self.camera_sync_enabled = False
+
+        # === Skeleton Filter ===
+        self.filtered_spatial_cc_ids = set()
