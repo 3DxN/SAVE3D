@@ -872,6 +872,22 @@ def extract_skeleton_points_for_kdtree(skeleton_L2, outer_masks_L2, label_names,
     
     print(f"\n  Total instances: {len(instances_info)}")
     
+    # === Spatial CC: label-agnostic 3D connected components ===
+    print("\n=== Computing Spatial CCs (label-agnostic, 26-connectivity) ===")
+    from scipy.ndimage import generate_binary_structure, label as ndimage_label
+    struct_26 = generate_binary_structure(3, 3)
+    spatial_cc_vol, num_spatial_cc = ndimage_label(skeleton_binary, structure=struct_26)
+    print(f"  Found {num_spatial_cc} spatial CCs")
+    
+    # Map each skeleton point to its spatial CC id
+    spatial_cc_ids = spatial_cc_vol[coords_zyx[:, 0], coords_zyx[:, 1], coords_zyx[:, 2]].astype(np.int32)
+    
+    # Summary per spatial CC
+    spatial_cc_sizes = np.bincount(spatial_cc_ids[spatial_cc_ids > 0])
+    if len(spatial_cc_sizes) > 1:
+        print(f"  Size range: {spatial_cc_sizes[1:].min()} — {spatial_cc_sizes[1:].max()} points")
+        print(f"  Top 5: {sorted(spatial_cc_sizes[1:], reverse=True)[:5]}")
+
     # Build result
     # =============================================================
     result = {
@@ -882,6 +898,7 @@ def extract_skeleton_points_for_kdtree(skeleton_L2, outer_masks_L2, label_names,
         'z_L0': z_L0_arr.tolist(),
         'neighbors': neighbors_list,
         'instance_ids': instance_ids.tolist(),
+        'spatial_cc_ids': spatial_cc_ids.tolist(),
         'instances': instances_info,
         'label_names': label_names,
         'voxel_size_L2': list(voxel_size_L2),

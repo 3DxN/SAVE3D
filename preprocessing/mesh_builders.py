@@ -834,7 +834,7 @@ def _gpu_binary_dilation_3d(mask, radius=3):
     from skimage.morphology import binary_dilation, ball
     return binary_dilation(mask, ball(radius))
 
-
+'''
 def prebuild_skeleton_meshes(skeleton_L2, outer_masks_L2, label_names, 
                               label_colors, voxel_size_L2, output_dir,
                               processing_level=2):
@@ -980,7 +980,149 @@ def prebuild_skeleton_meshes(skeleton_L2, outer_masks_L2, label_names,
     print(f"\n✓ Skeleton meshes complete: {len(mesh_info['meshes'])} meshes saved")
     
     return mesh_info
-
+'''
+def prebuild_skeleton_meshes(skeleton_L2, outer_masks_L2, label_names, 
+                              label_colors, voxel_size_L2, output_dir,
+                              processing_level=2):
+    """
+    Prebuild skeleton tube meshes — per (spatial_cc × label) for filtering + color
+    
+    1. Spatial CC (26-connectivity, label-agnostic) for filtering
+    2. Label assignment for color
+    3. One mesh per (spatial_cc, label) combination
+    4. Each mesh records spatial_cc_id + CC voxel_count for runtime filtering
+    """
+    mesh_dir = Path(output_dir) / "skeleton_meshes"
+    mesh_dir.mkdir(exist_ok=True)
+    
+    print("\n=== Prebuilding Skeleton Meshes @ L2 (per spatial CC × label) ===")
+    print(f"  GPU Acceleration: {'Enabled (CuPy)' if CUPY_LABEL_AVAILABLE else 'Disabled (CPU only)'}")
+    
+    skeleton_binary = skeleton_L2 > 0
+    total_voxels = np.sum(skeleton_binary)
+    print(f"  Total skeleton voxels: {total_voxels:,}")
+    
+    if total_voxels == 0:
+        print("  ⚠ No skeleton voxels!")
+        return {'meshes': {}, 'total_voxels': 0, 'mode': 'per_spatial_cc'}
+    
+    # Step 1: Spatial CC (label-agnostic, 26-connectivity)
+    print("  Step 1: 3D connected component analysis (26-connectivity)...")
+    struct_26 = ndimage.generate_binary_structure(3, 3)
+    labeled_cc, num_cc = ndimage.label(skeleton_binary, structure=struct_26)
+    print(f"    Found {num_cc} spatial CCs")
+    
+    # Compute voxel count per spatial CC
+    cc_voxel_counts = {}
+    for cc_id in range(1, num_cc + 1):
+        cc_voxel_counts[cc_id] = int(np.sum(labeled_cc == cc_id))
+    
+    # Step 2: Label assignment
+    print("  Step 2: Assigning labels to skeleton voxels...")
+    skeleton_labels = np.zeros_like(skeleton_binary, dtype=np.uint8)
+    
+    for label_idx, label_name in enumerate(label_names, start=1):
+        if label_name not in outer_masks_L2:
+            continue
+        outer_mask = outer_masks_L2[label_name]
+        if hasattr(outer_mask, 'compute'):
+            outer_mask = outer_mask.compute()
+        available = (skeleton_binary > 0) & (skeleton_labels == 0)
+        intersection = available & (outer_mask > 0)
+        skeleton_labels[intersection] = label_idx
+        voxel_count = np.sum(intersection)
+        print(f"    {label_name}: {voxel_count:,} voxels")
+    
+    # Step 3: Build per (spatial_cc, label) masks and dilate
+    print("  Step 3: Building per (spatial_cc × label) masks...")
+    instance_tasks = []
+    
+    for cc_id in range(1, num_cc + 1):
+        cc_mask = (labeled_cc == cc_id)
+        cc_size = cc_voxel_counts[cc_id]
+        
+        for label_idx, label_name in enumerate(label_names, start=1):
+            combo_mask = cc_mask & (skeleton_labels == label_idx)
+            
+            if np.sum(combo_mask) == 0:
+                continue
+            
+            dilated = _gpu_binary_dilation_3d(combo_mask, radius=3)
+            color = label_colors.get(label_name, '#808080')
+            mesh_key = f"cc{cc_id}_{label_name}"
+            
+            instance_tasks.append((
+                mesh_key, cc_id, label_name, dilated, cc_size,
+                color, mesh_dir, voxel_size_L2
+            ))
+    
+    print(f"    {len(instance_tasks)} (cc × label) combinations")
+    
+    # Step 4: Generate meshes in parallel
+    print(f"  Step 4: Generating meshes (parallel)...")
+    
+    def _build_cc_label_mesh(args):
+        mesh_key, cc_id, label_name, mask_data, cc_size, color, mesh_dir, voxel_size = args
+        mesh = _create_mesh_for_morphology(mask_data, voxel_size)
+        
+        if mesh is not None and mesh.n_cells > 0:
+            mesh_file = f"skeleton_{mesh_key}.vtk"
+            mesh.save(str(mesh_dir / mesh_file), binary=True)
+            return {
+                'mesh_key': mesh_key,
+                'spatial_cc_id': cc_id,
+                'label_name': label_name,
+                'path': f"skeleton_meshes/{mesh_file}",
+                'n_points': int(mesh.n_points),
+                'n_cells': int(mesh.n_cells),
+                'color': color,
+                'voxel_count': cc_size,  # entire spatial CC size
+            }
+        return None
+    
+    mesh_info = {
+        'voxel_size_L2': list(voxel_size_L2),
+        'processing_level': processing_level,
+        'total_voxels': int(total_voxels),
+        'num_spatial_cc': num_cc,
+        'cc_voxel_counts': cc_voxel_counts,
+        'mode': 'per_spatial_cc',
+        'meshes': {}
+    }
+    
+    import os
+    n_workers = min(4, os.cpu_count() or 4, max(1, len(instance_tasks)))
+    
+    with ThreadPoolExecutor(max_workers=n_workers) as executor:
+        futures = {executor.submit(_build_cc_label_mesh, args): args[0]
+                   for args in instance_tasks}
+        
+        for future in tqdm(as_completed(futures), total=len(futures),
+                           desc="  Building skeleton meshes"):
+            try:
+                result = future.result()
+                if result:
+                    mesh_info['meshes'][result['mesh_key']] = {
+                        'spatial_cc_id': result['spatial_cc_id'],
+                        'label_name': result['label_name'],
+                        'path': result['path'],
+                        'n_points': result['n_points'],
+                        'n_cells': result['n_cells'],
+                        'color': result['color'],
+                        'voxel_count': result['voxel_count'],
+                    }
+            except Exception as e:
+                mesh_key = futures[future]
+                print(f"    ✗ {mesh_key}: {e}")
+    
+    # Save mesh info JSON
+    info_path = mesh_dir / "skeleton_mesh_info.json"
+    with open(info_path, 'w') as f:
+        json.dump(mesh_info, f, indent=2)
+    
+    print(f"\n✓ Skeleton meshes complete: {len(mesh_info['meshes'])} meshes saved (per_spatial_cc)")
+    
+    return mesh_info
 
 def _create_mesh_for_morphology(mask_3d, voxel_size, origin=(0, 0, 0)):
     """
