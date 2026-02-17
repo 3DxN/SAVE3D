@@ -365,7 +365,7 @@ def _update_visibility(app):
 def _reset_2d_view(app):
     """Reset Napari 2D view to fit all data"""
     app.state.auto_center_enabled = False
-    app.center_btn.setText('Center on 2D CC')
+    app.center_btn.setText('Center on Contour')
     app.napari_view.viewer.reset_view()
 
 
@@ -378,12 +378,12 @@ def _center_on_component(app, from_button=True):
     if from_button:
         if not app.state.auto_center_enabled:
             app.state.auto_center_enabled = True
-            app.center_btn.setText('Center on 2D CC ●')
+            app.center_btn.setText('Center on Contour ●')
             print("[AUTO CENTER] Enabled")
         else:
             # Already enabled, this click disables it
             app.state.auto_center_enabled = False
-            app.center_btn.setText('Center on 2D CC')
+            app.center_btn.setText('Center on Contour')
             print("[AUTO CENTER] Disabled")
             return
     
@@ -809,7 +809,7 @@ def _clear_tracking(app):
     # Disable auto-center
     app.state.auto_center_enabled = False
     app.center_btn.setChecked(False)
-    app.center_btn.setText('Center on 2D CC')
+    app.center_btn.setText('Center on Contour')
     
     # Reset tracked state
     app.state.tracked_state = {
