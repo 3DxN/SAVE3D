@@ -49,7 +49,10 @@ class DataLoader:
         self.skeleton_instance_ids = None
         self.skeleton_kdtree = None
         self.skeleton_instances = []
-        self.skeleton_neighbors = []      # ← 新增
+        self.skeleton_neighbors = []
+        self.skeleton_mesh_mode = 'per_label'  # 'per_label' or 'per_instance'
+        self._skeleton_mesh_info = {}
+        self.skeleton_spatial_cc_ids = None
         
         # === CC Metadata ===
         self.cc_metadata = None
@@ -123,6 +126,7 @@ class DataLoader:
         self.skeleton_coords_voxel = np.array(skeleton_points['coords_voxel'], dtype=np.int32)
         self.skeleton_neighbors = skeleton_points.get('neighbors', [])
         self.skeleton_instance_ids = np.array(skeleton_points.get('instance_ids', []), dtype=np.int32)
+        self.skeleton_spatial_cc_ids = np.array(skeleton_points.get('spatial_cc_ids', []), dtype=np.int32)
         self.skeleton_instances = skeleton_points.get('instances', [])
         print(f"[OK] Skeleton KD-Tree: {len(self.skeleton_coords)} points")
 
@@ -186,7 +190,7 @@ class DataLoader:
             print(f"Inner @ L2: {list(self.inner_masks_L2.keys())}")
         else:
             print(f"Inner @ L2: None (outer-only mode)")
-
+    '''
     def _load_skeleton_meshes(self):
         """
         Load skeleton meshes for all labels
@@ -310,7 +314,142 @@ class DataLoader:
                 print(f"    ✗ {label_name}: mesh creation failed - {e}")
         
         print(f"[OK] Generated {len(self.skeleton_meshes)} skeleton meshes (on-the-fly)")
-
+    '''
+    def _load_skeleton_meshes(self):
+        """
+        Load skeleton meshes — supports per_spatial_cc and per_label modes
+        
+        Per spatial CC: keyed by cc_id (str), enables size filtering
+        Per label: keyed by label_name (legacy fallback)
+        """
+        print("\n=== Loading Skeleton Meshes @ L2 ===")
+        
+        self.skeleton_meshes = {}
+        
+        # === Try loading prebuilt meshes first (FAST PATH) ===
+        skeleton_mesh_dir = self.zarr_path.parent / "skeleton_meshes"
+        skeleton_mesh_info_path = skeleton_mesh_dir / "skeleton_mesh_info.json"
+        
+        if skeleton_mesh_info_path.exists():
+            print("  Found prebuilt skeleton meshes, loading...")
+            try:
+                with open(skeleton_mesh_info_path, 'r') as f:
+                    mesh_info = json.load(f)
+                
+                self.skeleton_mesh_mode = mesh_info.get('mode', 'per_label')
+                print(f"  Mode: {self.skeleton_mesh_mode}")
+                
+                for key, info in mesh_info.get('meshes', {}).items():
+                    mesh_path = self.zarr_path.parent / info['path']
+                    if mesh_path.exists():
+                        mesh = pv.read(str(mesh_path))
+                        self.skeleton_meshes[key] = mesh
+                        
+                        if self.skeleton_mesh_mode == 'per_spatial_cc':
+                            label = info.get('dominant_label', '?')
+                            voxels = info.get('voxel_count', 0)
+                            print(f"    ✓ cc {key} ({label}): {mesh.n_points:,} pts, voxels={voxels}")
+                        else:
+                            print(f"    ✓ {key}: {mesh.n_points:,} pts, {mesh.n_cells:,} faces")
+                    else:
+                        print(f"    ✗ {key}: mesh file not found")
+                
+                # Store mesh info for runtime filtering
+                if self.skeleton_mesh_mode == 'per_spatial_cc':
+                    self._skeleton_mesh_info = mesh_info.get('meshes', {})
+                
+                if self.skeleton_meshes:
+                    print(f"[OK] Loaded {len(self.skeleton_meshes)} prebuilt skeleton meshes ({self.skeleton_mesh_mode})")
+                    return
+            except Exception as e:
+                print(f"  ⚠ Failed to load prebuilt meshes: {e}")
+                print("  Falling back to on-the-fly generation...")
+        
+        # === Fallback: Generate meshes on-the-fly (SLOW PATH, per-label only) ===
+        self.skeleton_mesh_mode = 'per_label'
+        print("  No prebuilt meshes found, generating on-the-fly...")
+        print("  (Run preprocessing with prebuild_skeleton_meshes() for faster startup)")
+        
+        if 'skeleton_intersections' not in self.metadata:
+            print("[WARN] No skeleton intersection data")
+            return
+        
+        skeleton_L2 = None
+        skeleton_path_candidates = [
+            self.zarr_path.parent / "output_skeleton_32x_092625.tiff",
+            self.zarr_path.parent / "output_skeleton_32x_092625.tif",
+        ]
+        
+        for skeleton_path in skeleton_path_candidates:
+            if skeleton_path.exists():
+                skeleton_L2 = tifffile.imread(str(skeleton_path))
+                print(f"  Loaded skeleton: {skeleton_path}")
+                break
+        
+        if skeleton_L2 is None:
+            print("[WARN] Skeleton file not found")
+            return
+        
+        print(f"  Skeleton shape @ L2: {skeleton_L2.shape}")
+        
+        skeleton_binary = skeleton_L2 > 0
+        total_voxels = np.sum(skeleton_binary)
+        print(f"  Total skeleton voxels: {total_voxels:,}")
+        
+        if total_voxels == 0:
+            return
+        
+        skeleton_labels = np.zeros_like(skeleton_binary, dtype=np.uint8)
+        
+        print("  Recreating label assignments...")
+        for label_idx, label_name in enumerate(self.label_names, start=1):
+            if label_name not in self.outer_masks_L2:
+                continue
+            
+            available = (skeleton_binary > 0) & (skeleton_labels == 0)
+            outer_mask = self.outer_masks_L2[label_name][:].compute()
+            intersection = available & (outer_mask > 0)
+            skeleton_labels[intersection] = label_idx
+            
+            voxel_count = np.sum(intersection)
+            print(f"    {label_name}: {voxel_count:,} voxels")
+        
+        print("  Generating meshes...")
+        for label_idx, label_name in enumerate(self.label_names, start=1):
+            label_mask = (skeleton_labels == label_idx)
+            
+            if np.sum(label_mask) == 0:
+                print(f"    {label_name}: No voxels, skipping")
+                continue
+            
+            try:
+                from skimage.morphology import binary_dilation, ball
+                label_mask_dilated = binary_dilation(label_mask, ball(3))
+            except:
+                label_mask_dilated = label_mask
+            
+            data_transposed = np.transpose(label_mask_dilated, (2, 1, 0))
+            
+            try:
+                grid = pv.ImageData(
+                    dimensions=data_transposed.shape,
+                    spacing=self.voxel_size_L2,
+                    origin=(0, 0, 0)
+                )
+                
+                grid.point_data['values'] = data_transposed.ravel(order='F')
+                mesh = grid.contour(isosurfaces=[0.5])
+                
+                if mesh.n_cells > 0:
+                    self.skeleton_meshes[label_name] = mesh
+                    n_faces = mesh.n_faces_strict if hasattr(mesh, 'n_faces_strict') else mesh.n_cells
+                    print(f"    ✓ {label_name}: {mesh.n_points:,} pts, {n_faces:,} faces")
+                
+            except Exception as e:
+                print(f"    ✗ {label_name}: mesh creation failed - {e}")
+        
+        print(f"[OK] Generated {len(self.skeleton_meshes)} skeleton meshes (on-the-fly)")
+        
     def _load_cc_metadata(self):
         """
         Load CC metadata
