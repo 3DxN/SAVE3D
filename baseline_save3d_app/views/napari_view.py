@@ -242,7 +242,7 @@ class NapariViewController:
     def _world_from_vispy_event(self, ow, ev):
         """Convert vispy event canvas position to world coords."""
         try:
-            pos_px = ev.pos
+            pos_px = ev.pos if hasattr(ev, 'pos') and len(np.array(ev.pos)) == 2 else np.array(ev.position)[:2]
             canvas = ow.qt_viewer.canvas
             vm = ow.vm_container.viewer_model
             vb = canvas.view
@@ -258,53 +258,65 @@ class NapariViewController:
         except Exception as e:
             print(f"[ORTHO] world_from_event error: {e}")
             return None
-
+    
     def _register_ortho_vispy(self, ow, vm_ref):
         """Register ortho: left drag = crosshair, right drag = pan."""
-        sc = ow.qt_viewer.canvas._scene_canvas
-        dragging = [False]
         pan_start = [None]
-
-        def on_press(ev):
-            if ev.button == 1:
-                dragging[0] = True
-                ev.handled = True
-                world = self._world_from_vispy_event(ow, ev)
+        # 左鍵 crosshair — 用 napari 層級攔截
+        @vm_ref.mouse_drag_callbacks.append
+        def on_drag(vr, event):
+            if event.type == 'mouse_press' and event.button == 1:
+                event.handled = True
+                world = self._world_from_vispy_event(ow, event)
                 self._sync_world_to_main(world, vm_ref)
-            elif ev.button == 2:
-                pan_start[0] = np.array(ev.pos)
-                ev.handled = True
-
-        def on_move(ev):
-            if dragging[0]:
-                ev.handled = True
-                world = self._world_from_vispy_event(ow, ev)
-                self._sync_world_to_main(world, vm_ref)
-            elif pan_start[0] is not None:
-                ev.handled = True
-                delta = np.array(ev.pos) - pan_start[0]
-                pan_start[0] = np.array(ev.pos)
-                try:
-                    cam = sc.central_widget.children[0].children[0].camera
-                    cam.pan(delta * [-1, 1])
-                    ow.qt_viewer.canvas.update()
-                except Exception:
-                    pass
-
-        def on_release(ev):
-            if ev.button == 1 and dragging[0]:
-                dragging[0] = False
-                ev.handled = True
-                world = self._world_from_vispy_event(ow, ev)
+            yield
+            while event.type == 'mouse_move':
+                if event.button == 1:
+                    event.handled = True
+                    world = self._world_from_vispy_event(ow, event)
+                    self._sync_world_to_main(world, vm_ref)
+                yield
+            if event.button == 1:
+                event.handled = True
+                world = self._world_from_vispy_event(ow, event)
                 self._sync_world_to_main(world, vm_ref, update_3d=True)
-            elif ev.button == 2:
-                pan_start[0] = None
-                ev.handled = True
+        
+            @vm_ref.mouse_drag_callbacks.append
+            def on_pan(vr, event):
+                if event.type == 'mouse_press' and event.button == 2:
+                    event.handled = True
+                    pan_start[0] = np.array([event.native.x(), event.native.y()])
+                yield
+                while event.type == 'mouse_move':
+                    if event.button == 2 and pan_start[0] is not None:
+                        event.handled = True
+                        cur = np.array([event.native.x(), event.native.y()])
+                        delta = cur - pan_start[0]
+                        pan_start[0] = cur
+                        try:
+                            sc = ow.qt_viewer.canvas._scene_canvas
+                            cam = None
+                            for child in sc.central_widget.children:
+                                if hasattr(child, 'camera'):
+                                    cam = child.camera
+                                    break
+                                for subchild in getattr(child, 'children', []):
+                                    if hasattr(subchild, 'camera'):
+                                        cam = subchild.camera
+                                        break
+                                if cam:
+                                    break
+                            if cam:
+                                cam.pan(delta * [-1, -1])
+                                ow.qt_viewer.canvas._scene_canvas.update()
+                        except Exception as e:
+                            print(f"[ORTHO] pan error: {e}")
+                    yield
+                if event.button == 2:
+                    pan_start[0] = None
+                    event.handled = True
 
-        sc.events.mouse_press.connect(on_press)
-        sc.events.mouse_move.connect(on_move)
-        sc.events.mouse_release.connect(on_release)
-
+        
     def _sync_world_to_main(self, world, vm_ref, update_3d=False):
         """Sync world coords to main viewer dims."""
         if world is None:
@@ -321,29 +333,41 @@ class NapariViewController:
     # =========================================================================
 
     def _register_pan_callback(self, viewer_ref):
-        """Right-click drag = pan."""
-        self._pan_start = None
+        pan_start = [None]  # local variable
 
         @viewer_ref.mouse_drag_callbacks.append
         def on_pan(vr, event):
             if event.type == 'mouse_press' and event.button == 2:
                 event.handled = True
-                self._pan_start = np.array(event.pos)
+                pan_start[0] = np.array([event.native.x(), event.native.y()])
             yield
             while event.type == 'mouse_move':
-                if self._pan_start is not None and event.button == 2:
+                if pan_start[0] is not None and event.button == 2:
                     event.handled = True
-                    delta = np.array(event.pos) - self._pan_start
-                    self._pan_start = np.array(event.pos)
+                    cur = np.array([event.native.x(), event.native.y()])
+                    delta = cur - pan_start[0]
+                    pan_start[0] = cur
                     try:
-                        cam = vr.window._qt_viewer.canvas._scene_canvas.central_widget.children[0].children[0].camera
-                        cam.pan(delta * [-1, 1])
-                        vr.window._qt_viewer.canvas.update()
+                        cam = None
+                        sc = vr.window._qt_viewer.canvas._scene_canvas
+                        for child in sc.central_widget.children:
+                            if hasattr(child, 'camera'):
+                                cam = child.camera
+                                break
+                            for subchild in getattr(child, 'children', []):
+                                if hasattr(subchild, 'camera'):
+                                    cam = subchild.camera
+                                    break
+                            if cam:
+                                break
+                        if cam:
+                            cam.pan(delta * [-1, -1])
+                            vr.window._qt_viewer.canvas.update()
                     except Exception:
                         pass
                 yield
-            if self._pan_start is not None:
-                self._pan_start = None
+            if pan_start[0] is not None:
+                pan_start[0] = None
 
     def _register_drag_callback(self, viewer_ref):
         """Left-click drag = crosshair, release updates 3D."""

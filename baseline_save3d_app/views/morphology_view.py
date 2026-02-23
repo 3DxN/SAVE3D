@@ -241,6 +241,7 @@ class MorphologyViewController:
         Update three orthogonal cutting planes in 3D view to match napari crosshair.
         z, y, x are in voxel coordinates (dims.current_step).
         """
+        self.plotter.renderer.SetDraw(False)
         vs = self.app.data.voxel_size_L0
         z_um = z * vs[0]
         y_um = y * vs[1]
@@ -320,16 +321,17 @@ class MorphologyViewController:
         # 3D crosshair indicator at current position
         arm = min(x_max, y_max, z_max) * 0.08
         for p0, p1, color in [
-            ((x_um - arm, y_um, z_um), (x_um + arm, y_um, z_um), 'red'),
-            ((x_um, y_um - arm, z_um), (x_um, y_um + arm, z_um), 'green'),
-            ((x_um, y_um, z_um - arm), (x_um, y_um, z_um + arm), 'blue'),
+            ((x_um - arm, y_um, z_um), (x_um + arm, y_um, z_um), 'black'),
+            ((x_um, y_um - arm, z_um), (x_um, y_um + arm, z_um), 'black'),
+            ((x_um, y_um, z_um - arm), (x_um, y_um, z_um + arm), 'black'),
         ]:
             line = pv.Line(p0, p1)
             a = self.plotter.add_mesh(
-                line, color=color, line_width=8,
+                line, color=color, line_width=40,
                 lighting=False, render_lines_as_tubes=True,
                 opacity=1.0
             )
             self.crosshair_actors.append(a)
 
+        self.plotter.renderer.SetDraw(True)
         self.plotter.render()
