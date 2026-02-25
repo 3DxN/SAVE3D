@@ -57,3 +57,21 @@ def _reset_3d_view(app):
         print("[RESET] 3D camera reset")
     except Exception as e:
         print(f"[RESET] Error: {e}")
+
+def _on_lock_angle_toggle(app):
+    """Handle lock viewing angle checkbox toggle"""
+    locked = app.lock_angle_chk.isChecked()
+    if locked:
+        print("[LOCK] Viewing angle LOCKED")
+        app.morphology_view.plotter.enable_image_style()
+    else:
+        print("[LOCK] Viewing angle UNLOCKED")
+        app.morphology_view.plotter.enable_trackball_style()
+
+def _on_outer_opacity_changed(app, value):
+    opacity = value / 100.0
+    app.outer_opacity_label.setText(f'Mesh Opacity: {value}%')
+    app.morphology_view.outer_opacity = opacity
+    for actor in app.morphology_view.outer_actors.values():
+        actor.GetProperty().SetOpacity(opacity)
+    app.morphology_view.plotter.render()
