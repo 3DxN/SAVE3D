@@ -15,7 +15,7 @@ from qtpy import QtWidgets, QtCore
 from ..utils import _hex_to_rgba
 from .control_panel import _create_control_panel
 
-os.environ['NAPARI_ASYNC'] = '1'
+#os.environ['NAPARI_ASYNC'] = '1'
 try:
     from dask.cache import Cache
     _dask_cache = Cache(4e9)
@@ -36,6 +36,8 @@ class NapariViewController:
         self._dragging = False
         self._ortho_viewers = []
         self._ortho_filters = []
+        self._ortho_manager = None
+        self._syncing = False  # <-- add this
 
     def _setup_napari_panel(self):
         container = QtWidgets.QWidget()
@@ -47,7 +49,7 @@ class NapariViewController:
 
         try:
             from napari.settings import get_settings
-            get_settings().experimental.async_ = True
+            get_settings().experimental.async_ = False
             print("[ASYNC] Napari async rendering enabled")
         except Exception as e:
             print(f"[ASYNC] Could not enable async: {e}")
@@ -100,6 +102,7 @@ class NapariViewController:
         def _hook_ortho_callbacks():
             try:
                 m = _get_manager(self.viewer)
+                self._ortho_manager = m 
                 self._ortho_viewers = []
                 for w in [m.right_widget, m.bottom_widget]:
                     if hasattr(w, 'viewer'):
@@ -149,9 +152,9 @@ class NapariViewController:
                         if 'Press T' in lbl.text():
                             lbl.setVisible(False)
 
-                    from ..controls import (_reset_2d_view, _reset_3d_view,
+                    from ..controls import (_on_lock_angle_toggle,_reset_2d_view, _reset_3d_view,
                                             _on_opacity_changed, _on_inner_opacity_changed,
-                                            _on_morph_light_angle_changed)
+                                            _on_morph_light_angle_changed, _on_outer_opacity_changed)
                     lay = cw.layout()
 
                     def _add_slider_row(label_text, lo, hi, val, cb):
@@ -179,6 +182,16 @@ class NapariViewController:
                         self.app.inner_opacity_slider.valueChanged.connect(
                             lambda v: _on_inner_opacity_changed(self.app, v))
                         lay.addWidget(self.app.inner_opacity_slider)
+                    else:
+                        self.app.outer_opacity_label = QLabel('Mesh Opacity: 80%')
+                        self.app.outer_opacity_label.setStyleSheet(extra_style)
+                        lay.addWidget(self.app.outer_opacity_label)
+                        self.app.outer_opacity_slider = QSlider(QtCore.Qt.Horizontal)
+                        self.app.outer_opacity_slider.setRange(0, 100)
+                        self.app.outer_opacity_slider.setValue(80)
+                        self.app.outer_opacity_slider.valueChanged.connect(
+                            lambda v: _on_outer_opacity_changed(self.app, v))
+                        lay.addWidget(self.app.outer_opacity_slider)
 
                     self.app.morph_light_label = QLabel('Light Angle: 45°')
                     self.app.morph_light_label.setStyleSheet(extra_style)
@@ -206,7 +219,15 @@ class NapariViewController:
                     btn_l.addWidget(r3d)
                     lay.addWidget(btn_w)
 
-                    m.main_controls_widget.setMaximumHeight(250)
+                    # Lock angle checkbox
+                    self.app.lock_angle_chk = QtWidgets.QCheckBox('Lock Viewing Angle')
+                    self.app.lock_angle_chk.setStyleSheet(extra_style)
+                    self.app.lock_angle_chk.setChecked(False)
+                    self.app.lock_angle_chk.stateChanged.connect(lambda: _on_lock_angle_toggle(self.app))
+                    lay.addWidget(self.app.lock_angle_chk)
+
+                    m.main_controls_widget.setMaximumHeight(300)
+                    
                     print("[ORTHO] Controls configured")
 
                 except Exception as e:
@@ -216,8 +237,20 @@ class NapariViewController:
             except Exception as e:
                 print(f"[ORTHO] Hook error: {e}")
                 import traceback; traceback.print_exc()
+                return
 
-        QtCore.QTimer.singleShot(800, _hook_ortho_callbacks)
+            def _log(tag, v):
+                try:
+                    print(f"[DIMS]{tag} step={v.dims.current_step}")
+                except Exception as e:
+                    print(f"[DIMS]{tag} error: {e}")
+
+            self.viewer.dims.events.current_step.connect(lambda e: _log(" MAIN", self.viewer))
+            for i, ov in enumerate(self._ortho_viewers):
+                ov.dims.events.current_step.connect(lambda e, ii=i, vv=ov: _log(f" ORTHO[{ii}]", vv))
+                
+
+        QtCore.QTimer.singleShot(2000, _hook_ortho_callbacks)
 
         NAPARI_NATIVE_DOCKS = {'console', 'layer controls', 'layer list'}
         for dock in self.viewer.window._qt_window.findChildren(QtWidgets.QDockWidget):
@@ -232,6 +265,7 @@ class NapariViewController:
             self.viewer.window._qt_window.statusBar().setVisible(False)
         except:
             pass
+            
 
         return container
 
@@ -281,53 +315,99 @@ class NapariViewController:
                 world = self._world_from_vispy_event(ow, event)
                 self._sync_world_to_main(world, vm_ref, update_3d=True)
         
-            @vm_ref.mouse_drag_callbacks.append
-            def on_pan(vr, event):
-                if event.type == 'mouse_press' and event.button == 2:
+        @vm_ref.mouse_drag_callbacks.append
+        def on_pan(vr, event):
+            if event.type == 'mouse_press' and event.button == 2:
+                event.handled = True
+                pan_start[0] = np.array([event.native.x(), event.native.y()])
+            yield
+            while event.type == 'mouse_move':
+                if event.button == 2 and pan_start[0] is not None:
                     event.handled = True
-                    pan_start[0] = np.array([event.native.x(), event.native.y()])
-                yield
-                while event.type == 'mouse_move':
-                    if event.button == 2 and pan_start[0] is not None:
-                        event.handled = True
-                        cur = np.array([event.native.x(), event.native.y()])
-                        delta = cur - pan_start[0]
-                        pan_start[0] = cur
-                        try:
-                            sc = ow.qt_viewer.canvas._scene_canvas
-                            cam = None
-                            for child in sc.central_widget.children:
-                                if hasattr(child, 'camera'):
-                                    cam = child.camera
-                                    break
-                                for subchild in getattr(child, 'children', []):
-                                    if hasattr(subchild, 'camera'):
-                                        cam = subchild.camera
-                                        break
-                                if cam:
+                    cur = np.array([event.native.x(), event.native.y()])
+                    delta = cur - pan_start[0]
+                    pan_start[0] = cur
+                    try:
+                        sc = ow.qt_viewer.canvas._scene_canvas
+                        cam = None
+                        for child in sc.central_widget.children:
+                            if hasattr(child, 'camera'):
+                                cam = child.camera
+                                break
+                            for subchild in getattr(child, 'children', []):
+                                if hasattr(subchild, 'camera'):
+                                    cam = subchild.camera
                                     break
                             if cam:
-                                cam.pan(delta * [-1, -1])
-                                ow.qt_viewer.canvas._scene_canvas.update()
-                        except Exception as e:
-                            print(f"[ORTHO] pan error: {e}")
-                    yield
-                if event.button == 2:
-                    pan_start[0] = None
-                    event.handled = True
+                                break
+                        if cam:
+                            cam.pan(delta * [-1, -1])
+                            ow.qt_viewer.canvas._scene_canvas.update()
+                    except Exception as e:
+                        print(f"[ORTHO] pan error: {e}")
+                yield
+            if event.button == 2:
+                pan_start[0] = None
+                event.handled = True
 
-        
     def _sync_world_to_main(self, world, vm_ref, update_3d=False):
-        """Sync world coords to main viewer dims."""
         if world is None:
             return
+        if self._syncing:
+            return
+
+        self._syncing = True
         try:
-            self.viewer.dims.point = tuple(world)
+            world_point = tuple(
+                max(r.start, min(p, r.stop))
+                for p, r in zip(world, self.viewer.dims.range)
+            )
+
+            m = getattr(self, '_ortho_manager', None)
+            right_widget = m.right_widget if m else None
+            bottom_widget = m.bottom_widget if m else None
+
+            if right_widget and hasattr(right_widget, '_block_center'):
+                right_widget._block_center = True
+            if bottom_widget and hasattr(bottom_widget, '_block_center'):
+                bottom_widget._block_center = True
+
+            try:
+                self.viewer.dims.point = world_point
+                for ow in [right_widget, bottom_widget]:
+                    if ow is None:
+                        continue
+                    try:
+                        ow.vm_container.viewer_model.dims.point = world_point
+                    except Exception as e:
+                        print(f"[ORTHO] direct point set error: {e}")
+            finally:
+                if right_widget and hasattr(right_widget, '_block_center'):
+                    right_widget._block_center = False
+                if bottom_widget and hasattr(bottom_widget, '_block_center'):
+                    bottom_widget._block_center = False
+
+            # Force repaint on next event loop tick to avoid OpenGL framebuffer conflicts
+            def _force_repaint():
+                for ow in [right_widget, bottom_widget]:
+                    if ow is None:
+                        continue
+                    try:
+                        ow.qt_viewer.canvas._scene_canvas.update()
+                        ow.qt_viewer.canvas.native.repaint()  # Qt-level force repaint
+                    except Exception:
+                        pass
+
+            QtCore.QTimer.singleShot(0, _force_repaint)
+
             if update_3d:
                 self.app._update_crosshair(*self.viewer.dims.current_step)
+
         except Exception as e:
             print(f"[ORTHO] sync error: {e}")
-
+        finally:
+            self._syncing = False
+            
     # =========================================================================
     # XY view callbacks
     # =========================================================================
@@ -390,10 +470,7 @@ class NapariViewController:
                 self.app._update_crosshair(*self.viewer.dims.current_step)
 
     def _apply_crosshair(self, viewer_ref, pos=None):
-        """Update main viewer dims from cursor position."""
         if pos is None:
             pos = viewer_ref.cursor.position
-        with self.viewer.dims.events.current_step.blocker():
-            self.viewer.dims.set_point(0, pos[0])
-            self.viewer.dims.set_point(1, pos[1])
-        self.viewer.dims.set_point(2, pos[2])
+        # 直接用 _sync_world_to_main，確保三個 viewer 都更新
+        self._sync_world_to_main(tuple(pos), None)
