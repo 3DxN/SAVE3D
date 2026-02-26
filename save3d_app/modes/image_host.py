@@ -918,7 +918,7 @@ class ImageHost:
         if marker_pos is not None:
             dist, idx = app.data.skeleton_kdtree.query(marker_pos)
             skeleton_radius_um = 3 * app.data.voxel_size_L2[0]
-            threshold = skeleton_radius_um * 2.0
+            threshold = skeleton_radius_um * 3.0
             has_skeleton = (dist <= threshold)
         else:
             has_skeleton = False
@@ -958,7 +958,7 @@ class ImageHost:
             
             sphere = pv.Sphere(radius=radius, center=marker_pos)
             
-            color = 'black' if has_skeleton else 'black'
+            color = 'black' if has_skeleton else 'gray'
             opacity = 0.5  # Semi-transparent for visibility
             
             app.skeleton_view.black_marker_actor = app.skeleton_view.plotter.add_mesh(
@@ -1037,9 +1037,9 @@ class ImageHost:
 
                         # Check if on skeleton using kdtree
                         dist, idx = app.data.skeleton_kdtree.query(marker_pos)
-                        threshold = skeleton_radius_um * 2.0
+                        threshold = skeleton_radius_um * 3.0
                         has_skeleton = (dist <= threshold)
-                        color = 'black' if has_skeleton else 'black'
+                        color = 'black' if has_skeleton else 'gray'
                         
                         sphere = pv.Sphere(radius=radius, center=marker_pos)
                         app.skeleton_view.black_marker_actor.mapper.SetInputData(sphere)
