@@ -178,6 +178,7 @@ def _on_skeleton_opacity_changed(app, value):
         actor.GetProperty().SetOpacity(opacity)
     app.skeleton_view.plotter.render()
 
+'''
 def _on_inner_opacity_changed(app, value):
     """Update inner lumen opacity in morphology view"""
     opacity = value / 100.0
@@ -186,7 +187,39 @@ def _on_inner_opacity_changed(app, value):
     for actor in app.morphology_view.inner_mesh_actors.values():
         actor.GetProperty().SetOpacity(opacity)
     app.morphology_view.plotter.render()
+'''
 
+def _on_inner_opacity_changed(app, value):
+    """Update inner lumen opacity in morphology view"""
+    opacity = value / 100.0
+    app.inner_opacity_label.setText(f'Inner Lumen Opacity: {value}%')
+    app.morphology_view.inner_opacity = opacity
+
+    # 1. Instance mode actors (image host instance / skeleton host instance)
+    for actor in app.morphology_view.inner_mesh_actors.values():
+        actor.GetProperty().SetOpacity(opacity)
+
+    # 2. Image host label mode actors (keys prefixed with 'inner_')
+    for key, actor in app.morphology_view.label_mode_actors.items():
+        if key.startswith('inner_'):
+            actor.GetProperty().SetOpacity(opacity)
+
+    # 3. Skeleton host navigation/selection mode – global_morph_actors use per-vertex RGBA
+    #    Update base_opacity and re-apply to all vertices that were already visible (alpha > 0)
+    import numpy as np
+    for mesh_name, data in app.morphology_view.global_morph_actors.items():
+        if mesh_name.startswith('inner_'):
+            data['base_opacity'] = opacity
+            rgba = data['mesh'].point_data.get('rgba')
+            if rgba is not None:
+                # Re-scale non-zero alpha vertices to the new opacity
+                was_visible = rgba[:, 3] > 0
+                rgba[was_visible, 3] = int(opacity * 255)
+                data['mesh'].point_data['rgba'] = rgba
+                data['mesh'].Modified()
+
+    app.morphology_view.plotter.render()
+    
 def _on_morph_light_angle_changed(app, value):
     """Update morphology view light angle"""
     app.morph_light_label.setText(f'Light Angle: {value}°')
