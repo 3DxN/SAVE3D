@@ -3,8 +3,8 @@ Napari 2D View
 NOTE: Only setup function here. All operations are in modes/*.
 
 Mouse interaction:
-  XY view:    left drag = crosshair, right drag = pan
-  Ortho views: left drag = crosshair, right drag = pan
+  XY view:    left drag = pan, right-click/drag = crosshair
+  Ortho views: left drag = pan, right-click/drag = crosshair
 """
 
 import os
@@ -88,9 +88,8 @@ class NapariViewController:
         print(f"[COLORS] Added labels with custom colormap")
         self.viewer.layers.selection.active = self.lab_layer
 
-        # XY: left drag = crosshair, right drag = pan
+        # XY: left drag = pan (vispy default), right-click/drag = crosshair
         self._register_drag_callback(self.viewer)
-        self._register_pan_callback(self.viewer)
 
         layout.addWidget(napari_window, stretch=1)
         controls = _create_control_panel(self.app)
@@ -300,61 +299,26 @@ class NapariViewController:
             return None
     
     def _register_ortho_vispy(self, ow, vm_ref):
-        """Register ortho: left drag = crosshair, right drag = pan."""
-        pan_start = [None]
-        # 左鍵 crosshair — 用 napari 層級攔截
+        """Register ortho: left drag = pan (vispy default), right-click/drag = crosshair."""
+
         @vm_ref.mouse_drag_callbacks.append
         def on_drag(vr, event):
-            if event.type == 'mouse_press' and event.button == 1:
+            if event.type == 'mouse_press' and event.button == 2:
                 event.handled = True
                 world = self._world_from_vispy_event(ow, event)
                 self._sync_world_to_main(world, vm_ref)
             yield
             while event.type == 'mouse_move':
-                if event.button == 1:
+                if event.button == 2:
                     event.handled = True
                     world = self._world_from_vispy_event(ow, event)
                     self._sync_world_to_main(world, vm_ref)
                 yield
-            if event.button == 1:
+            if event.button == 2:
                 event.handled = True
                 world = self._world_from_vispy_event(ow, event)
                 self._sync_world_to_main(world, vm_ref, update_3d=True)
-        
-        @vm_ref.mouse_drag_callbacks.append
-        def on_pan(vr, event):
-            if event.type == 'mouse_press' and event.button == 2:
-                event.handled = True
-                pan_start[0] = np.array([event.native.x(), event.native.y()])
-            yield
-            while event.type == 'mouse_move':
-                if event.button == 2 and pan_start[0] is not None:
-                    event.handled = True
-                    cur = np.array([event.native.x(), event.native.y()])
-                    delta = cur - pan_start[0]
-                    pan_start[0] = cur
-                    try:
-                        sc = ow.qt_viewer.canvas._scene_canvas
-                        cam = None
-                        for child in sc.central_widget.children:
-                            if hasattr(child, 'camera'):
-                                cam = child.camera
-                                break
-                            for subchild in getattr(child, 'children', []):
-                                if hasattr(subchild, 'camera'):
-                                    cam = subchild.camera
-                                    break
-                            if cam:
-                                break
-                        if cam:
-                            cam.pan(delta * [-1, -1])
-                            ow.qt_viewer.canvas._scene_canvas.update()
-                    except Exception as e:
-                        print(f"[ORTHO] pan error: {e}")
-                yield
-            if event.button == 2:
-                pan_start[0] = None
-                event.handled = True
+
 
     def _sync_world_to_main(self, world, vm_ref, update_3d=False):
         if world is None:
@@ -418,48 +382,11 @@ class NapariViewController:
     # XY view callbacks
     # =========================================================================
 
-    def _register_pan_callback(self, viewer_ref):
-        pan_start = [None]  # local variable
-
-        @viewer_ref.mouse_drag_callbacks.append
-        def on_pan(vr, event):
-            if event.type == 'mouse_press' and event.button == 2:
-                event.handled = True
-                pan_start[0] = np.array([event.native.x(), event.native.y()])
-            yield
-            while event.type == 'mouse_move':
-                if pan_start[0] is not None and event.button == 2:
-                    event.handled = True
-                    cur = np.array([event.native.x(), event.native.y()])
-                    delta = cur - pan_start[0]
-                    pan_start[0] = cur
-                    try:
-                        cam = None
-                        sc = vr.window._qt_viewer.canvas._scene_canvas
-                        for child in sc.central_widget.children:
-                            if hasattr(child, 'camera'):
-                                cam = child.camera
-                                break
-                            for subchild in getattr(child, 'children', []):
-                                if hasattr(subchild, 'camera'):
-                                    cam = subchild.camera
-                                    break
-                            if cam:
-                                break
-                        if cam:
-                            cam.pan(delta * [-1, -1])
-                            vr.window._qt_viewer.canvas.update()
-                    except Exception:
-                        pass
-                yield
-            if pan_start[0] is not None:
-                pan_start[0] = None
-
     def _register_drag_callback(self, viewer_ref):
-        """Left-click drag = crosshair, release updates 3D."""
+        """Right-click/drag = crosshair, release updates 3D."""
         @viewer_ref.mouse_drag_callbacks.append
         def on_drag(vr, event):
-            if event.type == 'mouse_press' and event.button == 1:
+            if event.type == 'mouse_press' and event.button == 2:
                 event.handled = True
                 self._dragging = True
                 self._apply_crosshair(vr)
@@ -478,4 +405,5 @@ class NapariViewController:
     def _apply_crosshair(self, viewer_ref, pos=None):
         if pos is None:
             pos = viewer_ref.cursor.position
+        # 直接用 _sync_world_to_main，確保三個 viewer 都更新
         self._sync_world_to_main(tuple(pos), None)
