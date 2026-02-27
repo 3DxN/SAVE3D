@@ -25,7 +25,8 @@ class MorphologyViewController:
         # Mesh actors
         self.outer_actors = {}
         self.inner_actors = {}
-        self.crosshair_actors = []
+        self.crosshair_actors = []  # 3D crosshair indicator (always visible)
+        self.plane_actors = []      # cutting planes + borders (controlled by show_planes)
 
         
     def set_light_angle(self, angle_deg):
@@ -159,16 +160,13 @@ class MorphologyViewController:
 
         self.plotter.reset_camera()
 
-        # Setup Shift+hover to update napari crosshair
+        # Setup right-click ray casting
         self._setup_hover_callback()
 
         return container
 
     def _setup_hover_callback(self):
-        """Right-click on 3D mesh surface → update napari crosshair via ray casting.
-        Uses same approach as skeleton_view: RightButtonPressEvent + SetDisplayPoint/DisplayToWorld.
-        """
-        # Pre-collect all outer mesh points for ray casting
+        """Right-click on 3D mesh surface → update napari crosshair via ray casting."""
         pts = []
         for mesh in self.app.data.global_morph_meshes.values():
             if hasattr(mesh, 'points'):
@@ -194,7 +192,7 @@ class MorphologyViewController:
             dots = np.dot(vecs, ray_dir)
             proj = dots[:, None] * ray_dir
             perp_dists = np.linalg.norm(vecs - proj, axis=1)
-            perp_dists[dots < 0] = np.inf  # behind camera
+            perp_dists[dots < 0] = np.inf
 
             idx = np.argmin(perp_dists)
             if perp_dists[idx] == np.inf:
@@ -213,7 +211,7 @@ class MorphologyViewController:
 
         def _on_right_press(obj, event):
             if not self._right_lock.acquire(blocking=False):
-                return  # already executing, skip
+                return
             try:
                 click_x, click_y = self.plotter.iren.interactor.GetEventPosition()
                 pt = _find_nearest_to_click(click_x, click_y)
@@ -236,9 +234,19 @@ class MorphologyViewController:
         self.plotter.iren.interactor.AddObserver('RightButtonPressEvent', _on_right_press)
         print("  ✓ Morphology: Right-click ray casting crosshair registered")
 
+    def clear_planes(self):
+        """Remove cutting plane actors from 3D view."""
+        for actor in self.plane_actors:
+            try:
+                self.plotter.remove_actor(actor)
+            except:
+                pass
+        self.plane_actors = []
+        self.plotter.render()
+
     def update_crosshair(self, z, y, x):
         """
-        Update three orthogonal cutting planes in 3D view to match napari crosshair.
+        Update 3D crosshair indicator and (optionally) cutting planes.
         z, y, x are in voxel coordinates (dims.current_step).
         """
         self.plotter.renderer.SetDraw(False)
@@ -247,78 +255,81 @@ class MorphologyViewController:
         y_um = y * vs[1]
         x_um = x * vs[2]
 
-        # Remove old crosshair actors
-        for actor in self.crosshair_actors:
+        # Remove old actors
+        for actor in self.crosshair_actors + self.plane_actors:
             try:
                 self.plotter.remove_actor(actor)
             except:
                 pass
         self.crosshair_actors = []
+        self.plane_actors = []
 
-        # Determine bounds from loaded meshes (fallback to data shape)
+        # Bounds from data shape
         shape = self.app.data.lab_full.shape
         z_max = shape[0] * vs[0]
         y_max = shape[1] * vs[1]
         x_max = shape[2] * vs[2]
 
-        plane_color = [0.0, 0.0, 0.0]  # black
-        plane_opacity = 0.15
-        border_width = 3
-        border_opacity = 0.9
+        # === Cutting planes (only if show_planes enabled) ===
+        if getattr(self.app, 'show_planes', True):
+            plane_color = [0.0, 0.0, 0.0]
+            plane_opacity = 0.15
+            border_width = 3
+            border_opacity = 0.9
 
-        def _add_border(center, i_size, j_size, i_dir, j_dir, color):
-            cx, cy, cz = center
-            ix, iy, iz = [v * i_size / 2 for v in i_dir]
-            jx, jy, jz = [v * j_size / 2 for v in j_dir]
-            corners = [
-                (cx - ix - jx, cy - iy - jy, cz - iz - jz),
-                (cx + ix - jx, cy + iy - jy, cz + iz - jz),
-                (cx + ix + jx, cy + iy + jy, cz + iz + jz),
-                (cx - ix + jx, cy - iy + jy, cz - iz + jz),
-            ]
-            for k in range(4):
-                line = pv.Line(corners[k], corners[(k+1) % 4])
-                a = self.plotter.add_mesh(line, color=color, line_width=border_width,
-                                          opacity=border_opacity, lighting=False)
-                self.crosshair_actors.append(a)
+            def _add_border(center, i_size, j_size, i_dir, j_dir, color):
+                cx, cy, cz = center
+                ix, iy, iz = [v * i_size / 2 for v in i_dir]
+                jx, jy, jz = [v * j_size / 2 for v in j_dir]
+                corners = [
+                    (cx - ix - jx, cy - iy - jy, cz - iz - jz),
+                    (cx + ix - jx, cy + iy - jy, cz + iz - jz),
+                    (cx + ix + jx, cy + iy + jy, cz + iz + jz),
+                    (cx - ix + jx, cy - iy + jy, cz - iz + jz),
+                ]
+                for k in range(4):
+                    line = pv.Line(corners[k], corners[(k+1) % 4])
+                    a = self.plotter.add_mesh(line, color=color, line_width=border_width,
+                                              opacity=border_opacity, lighting=False)
+                    self.plane_actors.append(a)
 
-        # XY plane (axial) — constant Z, magenta border
-        xy_plane = pv.Plane(
-            center=(x_max / 2, y_max / 2, z_um),
-            direction=(0, 0, 1),
-            i_size=x_max, j_size=y_max,
-            i_resolution=1, j_resolution=1
-        )
-        a1 = self.plotter.add_mesh(xy_plane, color=plane_color, opacity=plane_opacity,
-                                    show_edges=False, lighting=False)
-        self.crosshair_actors.append(a1)
-        _add_border((x_max/2, y_max/2, z_um), x_max, y_max, (1,0,0), (0,1,0), 'yellow')
+            # XY plane (axial) — constant Z, magenta border
+            xy_plane = pv.Plane(
+                center=(x_max / 2, y_max / 2, z_um),
+                direction=(0, 0, 1),
+                i_size=x_max, j_size=y_max,
+                i_resolution=1, j_resolution=1
+            )
+            a1 = self.plotter.add_mesh(xy_plane, color=plane_color, opacity=plane_opacity,
+                                        show_edges=False, lighting=False)
+            self.plane_actors.append(a1)
+            _add_border((x_max/2, y_max/2, z_um), x_max, y_max, (1,0,0), (0,1,0), 'yellow')
 
-        # XZ plane (coronal) — constant Y, cyan border
-        xz_plane = pv.Plane(
-            center=(x_max / 2, y_um, z_max / 2),
-            direction=(0, 1, 0),
-            i_size=z_max, j_size=x_max,
-            i_resolution=1, j_resolution=1
-        )
-        a2 = self.plotter.add_mesh(xz_plane, color=plane_color, opacity=plane_opacity,
-                                    show_edges=False, lighting=False)
-        self.crosshair_actors.append(a2)
-        _add_border((x_max/2, y_um, z_max/2), z_max, x_max, (0,0,1), (1,0,0), 'magenta')
+            # XZ plane (coronal) — constant Y, cyan border
+            xz_plane = pv.Plane(
+                center=(x_max / 2, y_um, z_max / 2),
+                direction=(0, 1, 0),
+                i_size=z_max, j_size=x_max,
+                i_resolution=1, j_resolution=1
+            )
+            a2 = self.plotter.add_mesh(xz_plane, color=plane_color, opacity=plane_opacity,
+                                        show_edges=False, lighting=False)
+            self.plane_actors.append(a2)
+            _add_border((x_max/2, y_um, z_max/2), z_max, x_max, (0,0,1), (1,0,0), 'magenta')
 
-        # YZ plane (sagittal) — constant X, yellow border
-        yz_plane = pv.Plane(
-            center=(x_um, y_max / 2, z_max / 2),
-            direction=(1, 0, 0),
-            i_size=z_max, j_size=y_max,
-            i_resolution=1, j_resolution=1
-        )
-        a3 = self.plotter.add_mesh(yz_plane, color=plane_color, opacity=plane_opacity,
-                                    show_edges=False, lighting=False)
-        self.crosshair_actors.append(a3)
-        _add_border((x_um, y_max/2, z_max/2), z_max, y_max, (0,0,1), (0,1,0), 'cyan')
+            # YZ plane (sagittal) — constant X, yellow border
+            yz_plane = pv.Plane(
+                center=(x_um, y_max / 2, z_max / 2),
+                direction=(1, 0, 0),
+                i_size=z_max, j_size=y_max,
+                i_resolution=1, j_resolution=1
+            )
+            a3 = self.plotter.add_mesh(yz_plane, color=plane_color, opacity=plane_opacity,
+                                        show_edges=False, lighting=False)
+            self.plane_actors.append(a3)
+            _add_border((x_um, y_max/2, z_max/2), z_max, y_max, (0,0,1), (0,1,0), 'cyan')
 
-        # 3D crosshair indicator at current position
+        # === 3D crosshair indicator (always shown) ===
         arm = min(x_max, y_max, z_max) * 0.08
         for p0, p1, color in [
             ((x_um - arm, y_um, z_um), (x_um + arm, y_um, z_um), 'black'),

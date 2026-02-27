@@ -154,7 +154,7 @@ class NapariViewController:
 
                     from ..controls import (_on_lock_angle_toggle,_reset_2d_view, _reset_3d_view,
                                             _on_opacity_changed, _on_inner_opacity_changed,
-                                            _on_morph_light_angle_changed, _on_outer_opacity_changed)
+                                            _on_morph_light_angle_changed, _on_outer_opacity_changed, _on_show_planes_toggle)
                     lay = cw.layout()
 
                     def _add_slider_row(label_text, lo, hi, val, cb):
@@ -226,7 +226,13 @@ class NapariViewController:
                     self.app.lock_angle_chk.stateChanged.connect(lambda: _on_lock_angle_toggle(self.app))
                     lay.addWidget(self.app.lock_angle_chk)
 
-                    m.main_controls_widget.setMaximumHeight(275)
+                    self.app.show_planes_chk = QtWidgets.QCheckBox('Show Cutting Planes')
+                    self.app.show_planes_chk.setStyleSheet(extra_style)
+                    self.app.show_planes_chk.setChecked(True)
+                    self.app.show_planes_chk.stateChanged.connect(lambda: _on_show_planes_toggle(self.app))
+                    lay.addWidget(self.app.show_planes_chk)
+
+                    m.main_controls_widget.setMaximumHeight(300)
                     
                     print("[ORTHO] Controls configured")
 
@@ -472,5 +478,4 @@ class NapariViewController:
     def _apply_crosshair(self, viewer_ref, pos=None):
         if pos is None:
             pos = viewer_ref.cursor.position
-        # 直接用 _sync_world_to_main，確保三個 viewer 都更新
         self._sync_world_to_main(tuple(pos), None)
