@@ -15,12 +15,15 @@ class DataLoader:
     Data loader - loads all data and stores as attributes
     """
 
-    def __init__(self):
+    def __init__(self, display_level=0):
+        self.voxel_size_display = None
+        self.display_level = display_level  # 0=L0, 1=L1
         self.zarr_path = None
 
         # === Metadata ===
         self.metadata = None
         self.voxel_size_L0 = None
+        self.voxel_size_L1 = None
         self.voxel_size_L2 = None
         self.processing_level = None
         self.downsample_factor = None
@@ -62,6 +65,7 @@ class DataLoader:
             raise ValueError("metadata.json must have 'resolution_levels' key. Run new preprocessing.")
 
         self.voxel_size_L0 = tuple(self.metadata['resolution_levels']['L0']['voxel_size_um'])
+        self.voxel_size_L1 = tuple(v * 2 for v in self.voxel_size_L0)
         self.voxel_size_L2 = tuple(self.metadata['resolution_levels']['L2']['voxel_size_um'])
         self.processing_level = self.metadata['processing_level']
         self.downsample_factor = self.metadata['downsample_factor']
@@ -86,8 +90,8 @@ class DataLoader:
         self.img_levels = []
         for level in level_keys:
             self.img_levels.append(da.from_zarr(store[str(level)]))
-        self.img_full = self.img_levels[0]
-        print(f"Histology @ L0: {self.img_full.shape}")
+        self.img_full = self.img_levels[self.display_level]
+        print(f"Histology @ L{self.display_level}: {self.img_full.shape}")
 
         # Combined labels @ L0
         if 'segmentation' not in store:
@@ -97,8 +101,12 @@ class DataLoader:
         for level in level_keys:
             if str(level) in seg_group:
                 self.lab_levels.append(da.from_zarr(seg_group[str(level)]))
-        self.lab_full = self.lab_levels[0]
-        print(f"Combined labels @ L0: {self.lab_full.shape}")
+        self.lab_full = self.lab_levels[self.display_level]
+        print(f"Combined labels @ L{self.display_level}: {self.lab_full.shape}")
+
+        factor = 2 ** self.display_level
+        self.voxel_size_display = tuple(v * factor for v in self.voxel_size_L0)
+        print(f"Display @ L{self.display_level}: {self.img_full.shape}, voxel={self.voxel_size_display}")
 
         # Outer masks @ L2
         if 'outer_masks_L2' not in store:
