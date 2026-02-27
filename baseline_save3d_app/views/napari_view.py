@@ -68,8 +68,8 @@ class NapariViewController:
 
         is_rgb = len(data.img_full.shape) == 4
         self.img_layer = self.viewer.add_image(
-            data.img_levels[0], name='Histology', rgb=is_rgb,
-            opacity=0.8, scale=data.voxel_size_L0, cache=True
+            data.img_levels[data.display_level], name='Histology', rgb=is_rgb,
+            opacity=0.8, scale=data.voxel_size_display, cache=True
         )
 
         from napari.utils.colormaps import DirectLabelColormap
@@ -81,8 +81,8 @@ class NapariViewController:
             print(f"  {label_id}: {label_name} = {hex_color}")
 
         self.lab_layer = self.viewer.add_labels(
-            data.lab_levels[0], name='Labels', opacity=0.5,
-            scale=data.voxel_size_L0,
+            data.lab_levels[data.display_level], name='Labels', opacity=0.5,
+            scale=data.voxel_size_display,
             colormap=DirectLabelColormap(color_dict=color_dict), cache=True
         )
         print(f"[COLORS] Added labels with custom colormap")
@@ -226,7 +226,7 @@ class NapariViewController:
                     self.app.lock_angle_chk.stateChanged.connect(lambda: _on_lock_angle_toggle(self.app))
                     lay.addWidget(self.app.lock_angle_chk)
 
-                    m.main_controls_widget.setMaximumHeight(300)
+                    m.main_controls_widget.setMaximumHeight(275)
                     
                     print("[ORTHO] Controls configured")
 

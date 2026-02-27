@@ -218,7 +218,7 @@ class MorphologyViewController:
                 click_x, click_y = self.plotter.iren.interactor.GetEventPosition()
                 pt = _find_nearest_to_click(click_x, click_y)
                 if pt is not None:
-                    vs = self.app.data.voxel_size_L0
+                    vs = self.app.data.voxel_size_display
                     shape = self.app.data.lab_full.shape
                     x_world = max(0, min(pt[0], (shape[2]-1)*vs[2]))
                     y_world = max(0, min(pt[1], (shape[1]-1)*vs[1]))
@@ -242,7 +242,7 @@ class MorphologyViewController:
         z, y, x are in voxel coordinates (dims.current_step).
         """
         self.plotter.renderer.SetDraw(False)
-        vs = self.app.data.voxel_size_L0
+        vs = self.app.data.voxel_size_display
         z_um = z * vs[0]
         y_um = y * vs[1]
         x_um = x * vs[2]
@@ -292,7 +292,7 @@ class MorphologyViewController:
         a1 = self.plotter.add_mesh(xy_plane, color=plane_color, opacity=plane_opacity,
                                     show_edges=False, lighting=False)
         self.crosshair_actors.append(a1)
-        _add_border((x_max/2, y_max/2, z_um), x_max, y_max, (1,0,0), (0,1,0), 'magenta')
+        _add_border((x_max/2, y_max/2, z_um), x_max, y_max, (1,0,0), (0,1,0), 'yellow')
 
         # XZ plane (coronal) — constant Y, cyan border
         xz_plane = pv.Plane(
@@ -304,7 +304,7 @@ class MorphologyViewController:
         a2 = self.plotter.add_mesh(xz_plane, color=plane_color, opacity=plane_opacity,
                                     show_edges=False, lighting=False)
         self.crosshair_actors.append(a2)
-        _add_border((x_max/2, y_um, z_max/2), z_max, x_max, (0,0,1), (1,0,0), 'cyan')
+        _add_border((x_max/2, y_um, z_max/2), z_max, x_max, (0,0,1), (1,0,0), 'magenta')
 
         # YZ plane (sagittal) — constant X, yellow border
         yz_plane = pv.Plane(
@@ -316,7 +316,7 @@ class MorphologyViewController:
         a3 = self.plotter.add_mesh(yz_plane, color=plane_color, opacity=plane_opacity,
                                     show_edges=False, lighting=False)
         self.crosshair_actors.append(a3)
-        _add_border((x_um, y_max/2, z_max/2), z_max, y_max, (0,0,1), (0,1,0), 'yellow')
+        _add_border((x_um, y_max/2, z_max/2), z_max, y_max, (0,0,1), (0,1,0), 'cyan')
 
         # 3D crosshair indicator at current position
         arm = min(x_max, y_max, z_max) * 0.08
