@@ -10,7 +10,7 @@ from .state import AppState
 from .data import DataLoader
 from .views import NapariViewController, MorphologyViewController
 
-
+DISPLAY_LEVEL = 1 
 class BaselineViewer(QtWidgets.QWidget):
     
     def __init__(self, zarr_path: Path, parent=None):
@@ -22,7 +22,7 @@ class BaselineViewer(QtWidgets.QWidget):
         self.state = AppState()
         
         # === Data ===
-        self.data = DataLoader().load_all(zarr_path)
+        self.data = DataLoader(display_level=DISPLAY_LEVEL).load_all(zarr_path)
         
         # === View controllers ===
         self.napari_view = NapariViewController(self)
