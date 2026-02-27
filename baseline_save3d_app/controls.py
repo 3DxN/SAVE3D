@@ -75,3 +75,12 @@ def _on_outer_opacity_changed(app, value):
     for actor in app.morphology_view.outer_actors.values():
         actor.GetProperty().SetOpacity(opacity)
     app.morphology_view.plotter.render()
+
+def _on_show_planes_toggle(app):
+    app.show_planes = app.show_planes_chk.isChecked()
+    if not app.show_planes:
+        app.morphology_view.clear_planes()
+    else:
+        z, y, x = app.napari_view.viewer.dims.current_step
+        app.morphology_view.update_crosshair(z, y, x)
+    app.morphology_view.plotter.render()

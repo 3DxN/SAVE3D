@@ -3,6 +3,7 @@ SAVE-3D Baseline
 """
 
 from pathlib import Path
+import time
 import numpy as np
 from qtpy import QtWidgets, QtCore
 
@@ -10,7 +11,8 @@ from .state import AppState
 from .data import DataLoader
 from .views import NapariViewController, MorphologyViewController
 
-DISPLAY_LEVEL = 1 
+DISPLAY_LEVEL = 0 
+
 class BaselineViewer(QtWidgets.QWidget):
     
     def __init__(self, zarr_path: Path, parent=None):
@@ -29,10 +31,18 @@ class BaselineViewer(QtWidgets.QWidget):
         self.morphology_view = MorphologyViewController(self)
         
         # Note: active_3d_view is stored in self.state, set by _set_active_view in controls.py
+
+        # === Timer state ===
+        self._crosshair_timer = None
+        self._pending_crosshair = None
+        self._last_slice_time = time.time()
+        self._slice_change_count = 0
+        self._adaptive_delay = 50
         
         # === UI Setup ===
         self._setup_ui()
         self._connect_callbacks()
+        self._setup_timers()
         
         print("[OK] SAVE-3D Baseline Viewer initialized")
     
@@ -81,7 +91,24 @@ class BaselineViewer(QtWidgets.QWidget):
     def _setup_right_panels(self):
         morphology_panel = self.morphology_view._setup_morphology_panel()
         return morphology_panel
-        
+
+    # =========================================================================
+    # TIMERS
+    # =========================================================================
+
+    def _setup_timers(self):
+        """Setup application timers"""
+        self._crosshair_timer = QtCore.QTimer()
+        self._crosshair_timer.setSingleShot(True)
+        self._crosshair_timer.timeout.connect(self._flush_crosshair)
+        print("[OK] Timers configured")
+
+    def _flush_crosshair(self):
+        """Execute pending crosshair update after scroll stops"""
+        if self._pending_crosshair is not None:
+            z, y, x = self._pending_crosshair
+            self._pending_crosshair = None
+            self._update_crosshair(z, y, x)
     
     # =========================================================================
     # CALLBACKS
@@ -98,9 +125,23 @@ class BaselineViewer(QtWidgets.QWidget):
     
     def _on_slice_changed(self, event):
         z, y, x = self.napari_view.viewer.dims.current_step
-        # Only update 3D crosshair if not dragging (release triggers explicit update)
         if not getattr(self.napari_view, '_dragging', False):
-            self._update_crosshair(z, y, x)
+            current_time = time.time()
+            time_since_last = (current_time - self._last_slice_time) * 1000
+
+            if time_since_last < 50:
+                self._slice_change_count += 2
+                self._adaptive_delay = min(200, 100 + self._slice_change_count * 10)
+            elif time_since_last < 100:
+                self._slice_change_count += 1
+                self._adaptive_delay = min(150, 50 + self._slice_change_count * 5)
+            else:
+                self._slice_change_count = max(0, self._slice_change_count - 3)
+                self._adaptive_delay = max(16, 30 - self._slice_change_count * 2)
+
+            self._last_slice_time = current_time
+            self._pending_crosshair = (z, y, x)
+            self._crosshair_timer.start(self._adaptive_delay)
 
     def _update_crosshair(self, z, y, x):
         self.morphology_view.update_crosshair(z, y, x)
