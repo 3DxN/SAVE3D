@@ -310,6 +310,10 @@ def _update_visibility(app):
             vis = actor.GetVisibility() if actor else None
             print(f"  Actor {i}: visible={vis}, bounds={bounds}")
 
+    # 2D Contour Boundary visibility
+    if app.napari_view.boundary_layer is not None:
+        app.napari_view.boundary_layer.visible = app.show_boundary_chk.isChecked()
+
     # Marker visibility
     if app.skeleton_view.black_marker_actor:
         if app.state.host_mode == 'image':
