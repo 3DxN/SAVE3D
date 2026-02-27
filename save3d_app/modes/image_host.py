@@ -331,7 +331,7 @@ class ImageHost:
         if app.state.tracked_state['label_id'] is not None:
             self._update_skeleton_marker()
             if app.skeleton_view.black_marker_actor:
-                app.skeleton_view.black_marker_actor.visibility = True
+                app.skeleton_view.black_marker_actor.visibility = app.show_marker_chk.isChecked()
             print(f"  ✓ Marker updated")
         
         # Clear selection highlight and state
@@ -916,10 +916,12 @@ class ImageHost:
 
         # Use kdtree to determine if on skeleton (consistent with Skeleton Host)
         if marker_pos is not None:
-            dist, idx = app.data.skeleton_kdtree.query(marker_pos)
             skeleton_radius_um = 3 * app.data.voxel_size_L2[0]
+            dist, idx = app.data.skeleton_kdtree.query(marker_pos)
             threshold = skeleton_radius_um * 3.0
-            has_skeleton = (dist <= threshold)
+            nearest_spatial_cc = app.data.skeleton_spatial_cc_ids[idx]
+            filtered_out = getattr(app.state, 'filtered_spatial_cc_ids', set())
+            has_skeleton = (dist <= threshold) and (nearest_spatial_cc not in filtered_out)
         else:
             has_skeleton = False
         
@@ -968,6 +970,7 @@ class ImageHost:
                 name='marker'
             )
 
+            app.skeleton_view.black_marker_actor.visibility = app.show_marker_chk.isChecked()
             if app.state.host_mode == 'image':
                 app.state.sphere_position = np.array(marker_pos)
             
@@ -1038,7 +1041,9 @@ class ImageHost:
                         # Check if on skeleton using kdtree
                         dist, idx = app.data.skeleton_kdtree.query(marker_pos)
                         threshold = skeleton_radius_um * 3.0
-                        has_skeleton = (dist <= threshold)
+                        nearest_spatial_cc = app.data.skeleton_spatial_cc_ids[idx]
+                        filtered_out = getattr(app.state, 'filtered_spatial_cc_ids', set())
+                        has_skeleton = (dist <= threshold) and (nearest_spatial_cc not in filtered_out)
                         color = 'black' if has_skeleton else 'gray'
                         
                         sphere = pv.Sphere(radius=radius, center=marker_pos)
@@ -1047,7 +1052,7 @@ class ImageHost:
                         app.skeleton_view.black_marker_actor.GetProperty().SetColor(
                             pv.Color(color).float_rgb
                         )
-                        
+                        app.skeleton_view.black_marker_actor.visibility = app.show_marker_chk.isChecked()
                         app.skeleton_view.plotter.render()
                         
                         if app.state.host_mode == 'image':
