@@ -187,6 +187,8 @@ def gpu_downscale_local_mean_pipelined(image, factors, chunk_size_z=None, cval=0
     
     nz, ny, nx = image.shape[:3]
     fz, fy, fx = factors[:3]
+    nz = (nz // fz) * fz
+    image = image[:nz]
     
     # Auto-calculate optimal chunk size with detailed memory info
     if chunk_size_z is None:
@@ -347,6 +349,8 @@ def _gpu_downscale_sequential(image, factors, chunk_size_z, cval, clip, result, 
     """Simple sequential GPU processing (fallback)"""
     nz, ny, nx = image.shape[:3]
     fz = factors[0]
+    nz = (nz // fz) * fz
+    image = image[:nz]
     num_chunks = int(np.ceil(nz / chunk_size_z))
     
     for chunk_idx in tqdm(range(num_chunks), desc="    GPU chunks", unit="chunk", leave=False):
