@@ -199,6 +199,17 @@ class SAVE3DViewer(QtWidgets.QWidget):
         # Slice change
         viewer = self.napari_view.viewer
         viewer.dims.events.current_step.connect(self.image_host._on_slice_changed)
+
+        # Slice jump input
+        def _jump_to_slice():
+            try:
+                v = int(self.z_edit.text())
+                v = max(0, min(v, self.napari_view.viewer.dims.nsteps[0] - 1))
+                self.napari_view.viewer.dims.set_current_step(0, v)
+                self.z_edit.clearFocus()
+            except ValueError:
+                pass
+        self.z_edit.returnPressed.connect(_jump_to_slice)
         
         print("✓ Connected slice change callback")
         print("[OK] Callbacks connected")
