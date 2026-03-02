@@ -11,7 +11,7 @@ from .state import AppState
 from .data import DataLoader
 from .views import NapariViewController, MorphologyViewController
 
-DISPLAY_LEVEL = 0 
+DISPLAY_LEVEL = 1 
 
 class BaselineViewer(QtWidgets.QWidget):
     
