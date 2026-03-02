@@ -231,7 +231,59 @@ class NapariViewController:
                     self.app.show_planes_chk.stateChanged.connect(lambda: _on_show_planes_toggle(self.app))
                     lay.addWidget(self.app.show_planes_chk)
 
-                    m.main_controls_widget.setMaximumHeight(300)
+                    # === Slice position input (XY / XZ / YZ) ===
+                    from qtpy.QtWidgets import QLineEdit
+
+                    nav_w = QtWidgets.QWidget()
+                    nav_l = QHBoxLayout(nav_w)
+                    nav_l.setContentsMargins(0, 2, 0, 0)
+                    nav_l.setSpacing(4)
+
+                    def _make_lineedit(prefix, max_val):
+                        lbl = QLabel(prefix)
+                        lbl.setStyleSheet(extra_style)
+                        le = QLineEdit()
+                        le.setFixedWidth(30)
+                        le.setStyleSheet(extra_style)
+                        le.setPlaceholderText(f"0–{max_val-1}")
+                        nav_l.addWidget(lbl)
+                        nav_l.addWidget(le)
+                        return le
+
+                    nsteps = self.viewer.dims.nsteps
+                    z_edit = _make_lineedit('Z:', nsteps[0])
+                    y_edit = _make_lineedit('Y:', nsteps[1])
+                    x_edit = _make_lineedit('X:', nsteps[2])
+                    nav_l.addStretch()
+                    lay.addWidget(nav_w)
+
+                    # Enter → jump to slice
+                    def _make_jump(edit, axis, max_val):
+                        def _jump():
+                            try:
+                                v = int(edit.text())
+                                v = max(0, min(v, max_val - 1))
+                                self.viewer.dims.set_current_step(axis, v)
+                                edit.clearFocus()
+                            except ValueError:
+                                pass
+                        edit.returnPressed.connect(_jump)
+
+                    _make_jump(z_edit, 0, nsteps[0])
+                    _make_jump(y_edit, 1, nsteps[1])
+                    _make_jump(x_edit, 2, nsteps[2])
+
+                    # dims → lineedit (update display when slider moves)
+                    def _on_step(e):
+                        s = self.viewer.dims.current_step
+                        for edit, idx in [(z_edit, 0), (y_edit, 1), (x_edit, 2)]:
+                            if not edit.hasFocus():
+                                edit.setText(str(s[idx]))
+
+                    self.viewer.dims.events.current_step.connect(_on_step)
+
+                    m.main_controls_widget.setMaximumHeight(330)
+                    m.main_controls_widget.setMaximumWidth(250)
                     
                     print("[ORTHO] Controls configured")
 
