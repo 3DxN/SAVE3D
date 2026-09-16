@@ -6,8 +6,10 @@ A tri-view interactive visualization system for exploring 3D densely labeled tis
 
 ```
 SAVE3D/
-├── main_app.py              # Visualization entry point
 ├── main_preprocessing.py    # Preprocessing entry point
+├── main_app.py              # Visualization entry point
+├── baseline_app.py          # Baseline viewer entry point (point-based navigation)
+├── skeletonization.py       # Optional: generate a skeleton volume with kimimaro
 ├── doc/                     # Documentation and diagrams
 │   ├── save3d_preprocessing_pipeline.drawio
 │   ├── save3d_preprocessing_pipeline.drawio.png
@@ -24,14 +26,15 @@ SAVE3D/
 │   ├── mesh_builders.py     # Prebuild VTK meshes
 │   ├── zarr_writer.py       # OME-NGFF Zarr output
 │   └── utils.py             # Utilities
-└── save3d_app/              # Visualization application
-    ├── app.py               # Main application class
-    ├── controls.py          # UI callbacks
-    ├── state.py             # Application state
-    ├── data/                # Data loading from Zarr
-    ├── core/                # Core algorithms (contour propagation, mesh building)
-    ├── views/               # View controllers (Napari, Skeleton, Morphology)
-    └── modes/               # Host modes (ImageHost, SkeletonHost)
+├── save3d_app/              # Visualization application
+│   ├── app.py               # Main application class
+│   ├── controls.py          # UI callbacks
+│   ├── state.py             # Application state
+│   ├── data/                # Data loading from Zarr
+│   ├── core/                # Core algorithms (contour propagation, mesh building)
+│   ├── views/               # View controllers (Napari, Skeleton, Morphology)
+│   └── modes/               # Host modes (ImageHost, SkeletonHost)
+└── baseline_save3d_app/     # Baseline viewer (no skeleton view, no host modes)
 ```
 
 ## Workflow Overview
@@ -66,6 +69,7 @@ SAVE3D/
 - `cc_metadata.json` — 2D contours precomputed data (critical for runtime)
 - `skeleton_points.json` — Skeleton points for KD-Tree
 - `skeleton_graph.json` — Skeleton graph structure
+- `skeleton_meshes/` — Per-spatial-component skeleton meshes for the 3D topology view
 - `morphology_meshes/` — Per-label meshes for image-host label mode and skeleton-host navigation mode
 - `skeleton_instance_meshes/` — Meshes for skeleton-host instance mode
 - `image_host_meshes/` — Meshes for image-host instance mode
@@ -96,24 +100,119 @@ SAVE3D/
 | 1: Label (all objects sharing the same label) | 1: Navigation (dynamic radius around widget) |
 | 2: Z Navigation (overlap-based propagation path) | 2: Selection (brushing along skeleton) |
 
-## Usage
-
-```bash
-# Step 1: Preprocessing (configure paths in main_preprocessing.py)
-python main_preprocessing.py
-
-# Step 2: Launch visualization
-python main_app.py output.zarr
-```
-
 ## Input Data Requirements
+
+You supply four volumes, all shaped **(Z, Y, X)**. This repository ships **no sample data and no download script**.
 
 | Data | Resolution | Format | Description |
 |------|------------|--------|-------------|
-| 3D Image | L0 (original) | .tif / .npy | Raw tissue image |
-| Outer Masks | L2 (4x downsampled) | .tif | Segmentation masks per label |
-| Inner Masks | L2 (4x downsampled) | .tif | Optional inner structure masks |
-| Skeleton | L2 (4x downsampled) | .tif | 3D skeleton/centerline |
+| 3D Image | L0 (original) | `.tif` / `.tiff` / `.npy` | Raw tissue image. Grayscale or RGB |
+| Outer Masks | L2 (4x downsampled) | `.tif` | **Required.** Segmentation masks (see the two formats below) |
+| Inner Masks | L2 (4x downsampled) | `.tif` | Optional inner/lumen structure masks |
+| Skeleton | L2 (4x downsampled) | `.tif` | 3D skeleton/centerline; any nonzero voxel is skeleton |
+
+**Shape contract.** The masks and the skeleton must be *exactly* `L0_shape // DOWNSAMPLE_FACTOR` (4 by default). A mismatch only prints a warning while loading, but the upsampled result is checked strictly and the run aborts with `ValueError: Combined labels size mismatch!`.
+
+**4D TIFFs** are treated as RGB: `(Z, Y, X, C)` is kept as-is and `(Z, C, Y, X)` is transposed, in both cases keeping the first three channels (`preprocessing/loaders.py`).
+
+### Two mask formats
+
+Choose one with `USE_SEPARATE_MASKS` in `main_preprocessing.py`:
+
+**Format A — one binary TIFF per label** (`USE_SEPARATE_MASKS = True`)
+
+```python
+OUTER_MASKS_L2 = {'Benign': 'outer_benign.tif', 'HGPIN': 'outer_hgpin.tif'}
+INNER_MASKS_L2 = {'Benign': 'inner_benign.tif', 'HGPIN': 'inner_hgpin.tif'}  # {} for none
+```
+
+The dict keys are the label names, and all of them appear in the control-panel legend.
+
+**Format B — one integer label volume** (`USE_SEPARATE_MASKS = False`)
+
+```python
+LABEL_OUTER_PATH = 'labels.tif'   # voxel values: 0 = background, 1, 2, 3, ...
+LABEL_INNER_PATH = None           # optional
+LABEL_DICT = {1: 'Benign', 2: 'HGPIN'}   # {} to auto-name everything
+```
+
+Every nonzero value in the volume becomes a label. Values listed in `LABEL_DICT` take that name and appear in the legend; the rest are auto-named `Label_{value}` and are omitted from the legend.
+
+**Colors.** `USER_LABEL_COLORS` may be partial or empty — any label without an explicit hex color is assigned one automatically using a golden-ratio hue sequence.
+
+## Usage
+
+### Step 0 (optional) — Generate a skeleton
+
+Skip this if you already have a skeleton volume. `skeletonization.py` runs kimimaro TEASAR over a mask TIFF and writes a `uint8` volume with skeleton voxels set to 255. It has no command-line interface — edit `tiff_path`, `output_tiff_path`, `voxel_spacing`, and the `teasar_params` block at the top of the file. The input mask must already be at L2.
+
+```bash
+python skeletonization.py
+```
+
+### Step 1 — Preprocessing
+
+```bash
+python main_preprocessing.py
+```
+
+There is **no command-line interface and no config file**: every setting is a Python constant inside the `CONFIGURATION` block of `main()` in `main_preprocessing.py`. Edit that block before running. All input paths are **relative to the current working directory**, so run the script from the directory holding your TIFFs.
+
+| Constant | Default | Meaning |
+|----------|---------|---------|
+| `IMAGE_PATH` | `IDC-P_8x_111325.tif` | L0 image |
+| `VOXEL_SIZE_L0` | `(0.9667*2,) * 3` μm | Physical voxel size; drives every world coordinate |
+| `PYRAMID_LEVELS` | `4` | Depth of the image pyramid |
+| `PROCESSING_LEVEL` | `2` | Sets `DOWNSAMPLE_FACTOR = 2 ** N` (= 4) |
+| `SKELETON_L2` | `output_skeleton_32x_092625.tiff` | Skeleton volume @ L2 |
+| `OUT_ZARR` | `prostate_pathology10_gpu.zarr` | Output store |
+| `USE_SEPARATE_MASKS` | `True` | Format A (`True`) vs Format B (`False`) |
+| `OUTER_MASKS_L2`, `INNER_MASKS_L2` | 4 prostate labels | Format A mask paths |
+| `LABEL_OUTER_PATH`, `LABEL_INNER_PATH`, `LABEL_DICT` | crypt mask | Format B mask paths |
+| `USER_LABEL_COLORS` | 4 hex colors | Partial or empty is fine |
+
+GPU acceleration is detected automatically through CuPy; set `FORCE_CPU_MODE = True` in `preprocessing/config.py` to disable it.
+
+### Output layout — keep everything together
+
+All artifacts are written next to the store, into `Path(OUT_ZARR).parent`. If `OUT_ZARR` is a bare name, they land in the working directory as siblings of the `.zarr`. The application resolves every sidecar as `zarr_path.parent / <name>`, so **the `.zarr` directory and all of its sidecars must stay in the same folder**.
+
+```
+<data-dir>/
+├── out.zarr/                    # image pyramid "0".."3", segmentation/,
+│                                #   outer_masks_L2/, inner_masks_L2/
+├── metadata.json                # [required] resolution levels, label names/colors,
+│                                #   legend labels, has_inner_mask, skeleton intersections
+├── cc_metadata.json             # [required] per-label per-z contours, skeleton
+│                                #   markers, overlap relationships
+├── skeleton_points.json         # [required] KD-Tree points, labels, cc/instance ids
+├── skeleton_graph.json          # written, but not read by the current application
+├── image_host_meshes.json       # per-label 3D-component mesh index
+├── skeleton_meshes/             # skeleton_cc{N}_{label}.vtk + skeleton_mesh_info.json
+├── morphology_meshes/           # outer_{label}.vtk, inner_{label}.vtk + mesh_info.json
+├── skeleton_instance_meshes/    # inst_{id:04d}_{outer,inner}.vtk
+└── image_host_meshes/<label>/   # cc_{id:04d}_{outer,inner}.vtk
+```
+
+The three `[required]` files cause startup to fail if missing, as do the `segmentation` and `outer_masks_L2` groups inside the store. A missing mesh directory only logs a warning and degrades the corresponding view.
+
+### Step 2 — Launch the viewer
+
+```bash
+python main_app.py path/to/out.zarr
+```
+
+The zarr path is the only argument; there are no flags. Omitting it falls back to `prostate_pathology.zarr`, and a path that does not exist produces an error dialog and exit code 1.
+
+A second viewer is included for comparison against point-based navigation:
+
+```bash
+python baseline_app.py path/to/out.zarr
+```
+
+It reads the same store and the same sidecars (minus the skeleton-specific ones), has no skeleton view and no host modes, and renders pyramid level L1 rather than L0.
+
+If the project is installed as a package, `save3d-preprocess` and `save3d-app` are equivalent console entry points.
 
 ## Environment Setup
 
